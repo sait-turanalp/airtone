@@ -6,6 +6,8 @@ package tui
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,6 +22,26 @@ import (
 
 const httpPort = "1780"
 
+type screen int
+
+const (
+	screenHome screen = iota
+	screenSettings
+)
+
+// bufferPreset is a latency/smoothness profile (snapserver buffer in ms).
+type bufferPreset struct {
+	label string
+	ms    int
+	hint  string
+}
+
+var presets = []bufferPreset{
+	{"Low latency", 500, "snappier, needs a solid network"},
+	{"Balanced", 1500, "good default"},
+	{"Smooth", 4000, "max stability, more delay"},
+}
+
 // --- messages ---
 
 type tickMsg time.Time
@@ -30,24 +52,37 @@ type statusMsg struct {
 type doctorMsg []doctor.Check
 type startedMsg struct{ err error }
 type stoppedMsg struct{ err error }
+type setupDoneMsg struct{ err error }
 
 // --- model ---
 
 type model struct {
-	width  int
-	checks []doctor.Check
-	ready  bool
-	status *rpc.Status
-	url    string
-	busy   string // "Starting…" / "Stopping…" while a transition runs
-	note   string // transient message (e.g. an error)
+	screen   screen
+	width    int
+	checks   []doctor.Check
+	ready    bool
+	status   *rpc.Status
+	url      string
+	bufferMS int
+	busy     string // transient status line
+	note     string // transient message (e.g. an error)
 }
 
 // Run launches the interactive TUI.
 func Run() error {
-	p := tea.NewProgram(model{url: "http://" + engine.LANIP() + ":" + httpPort}, tea.WithAltScreen())
-	_, err := p.Run()
+	m := model{
+		url:      "http://" + engine.LANIP() + ":" + httpPort,
+		bufferMS: currentBuffer(),
+	}
+	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
+}
+
+func currentBuffer() int {
+	if v, err := strconv.Atoi(os.Getenv("AIRTONE_BUFFER")); err == nil && v > 0 {
+		return v
+	}
+	return 4000
 }
 
 func (m model) Init() tea.Cmd {
@@ -77,6 +112,18 @@ func stopEngine() tea.Msg {
 	return stoppedMsg{err: engine.Stop(&b)}
 }
 
+func runSetup() tea.Msg {
+	var b bytes.Buffer
+	return setupDoneMsg{err: engine.Setup(&b)}
+}
+
+// restartEngine stops then starts so a new buffer value takes effect.
+func restartEngine() tea.Msg {
+	var b bytes.Buffer
+	_ = engine.Stop(&b)
+	return startedMsg{err: engine.Start(&b)}
+}
+
 // --- update ---
 
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -84,22 +131,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 	case tea.KeyMsg:
-		switch msg.String() {
-		case "q", "ctrl+c":
+		if msg.String() == "q" || msg.String() == "ctrl+c" {
 			return m, tea.Quit
-		case "s":
-			if m.ready && m.busy == "" && !m.running() {
-				m.busy, m.note = "Starting…", ""
-				return m, startEngine
-			}
-		case "x":
-			if m.running() && m.busy == "" {
-				m.busy, m.note = "Stopping…", ""
-				return m, stopEngine
-			}
-		case "r":
-			return m, checkDoctor
 		}
+		if m.screen == screenSettings {
+			return m.updateSettings(msg)
+		}
+		return m.updateHome(msg)
 	case tickMsg:
 		return m, tea.Batch(pollStatus, tick())
 	case statusMsg:
@@ -122,6 +160,53 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err != nil {
 			m.note = "stop failed: " + msg.err.Error()
 		}
+	case setupDoneMsg:
+		m.busy = ""
+		if msg.err != nil {
+			m.note = "setup failed: " + msg.err.Error()
+		}
+		return m, checkDoctor
+	}
+	return m, nil
+}
+
+func (m model) updateHome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "s":
+		if m.ready && m.busy == "" && !m.running() {
+			m.busy, m.note = "Starting…", ""
+			return m, startEngine
+		}
+	case "x":
+		if m.running() && m.busy == "" {
+			m.busy, m.note = "Stopping…", ""
+			return m, stopEngine
+		}
+	case "g":
+		if !m.ready && m.busy == "" {
+			m.busy, m.note = "Running setup…", ""
+			return m, runSetup
+		}
+	case "c":
+		m.screen = screenSettings
+	case "r":
+		return m, checkDoctor
+	}
+	return m, nil
+}
+
+func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "c":
+		m.screen = screenHome
+	case "1", "2", "3":
+		i := int(msg.String()[0] - '1')
+		m.bufferMS = presets[i].ms
+		os.Setenv("AIRTONE_BUFFER", strconv.Itoa(m.bufferMS))
+		if m.running() {
+			m.busy = "Applying…"
+			return m, restartEngine
+		}
 	}
 	return m, nil
 }
@@ -136,28 +221,33 @@ func (m model) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render("AirTone") + "  " + dimStyle.Render("system audio → your phone, in sync") + "\n\n")
 
+	if m.screen == screenSettings {
+		b.WriteString(m.renderSettings())
+		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render("1/2/3")+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
+		return b.String()
+	}
+
 	switch {
 	case !m.ready:
 		b.WriteString(m.renderDoctor())
 	case m.running():
 		b.WriteString(m.renderLive())
 	default:
-		b.WriteString(boxStyle.Render("Ready. Press "+keyStyle.Render("s")+" to start streaming.") + "\n")
+		b.WriteString(boxStyle.Render("Ready. Press " + keyStyle.Render("s") + " to start streaming."))
 	}
 
 	if m.busy != "" {
-		b.WriteString("\n" + dimStyle.Render(m.busy) + "\n")
+		b.WriteString("\n" + dimStyle.Render(m.busy))
 	}
 	if m.note != "" {
-		b.WriteString("\n" + badStyle.Render(m.note) + "\n")
+		b.WriteString("\n" + badStyle.Render(m.note))
 	}
-	b.WriteString("\n" + m.footer())
+	b.WriteString("\n\n" + m.footer())
 	return b.String()
 }
 
 func (m model) renderDoctor() string {
-	var lines []string
-	lines = append(lines, "Setup check (press "+keyStyle.Render("r")+" to recheck, run "+keyStyle.Render("airtone setup")+" to fix):")
+	lines := []string{"Setup check:"}
 	for _, c := range m.checks {
 		if c.OK {
 			lines = append(lines, okStyle.Render("  ✓ ")+c.Name)
@@ -196,6 +286,8 @@ func (m model) renderLive() string {
 		"Listeners:",
 		listenerBlock,
 		"",
+		"Buffer:    " + fmt.Sprintf("%dms", m.bufferMS),
+		"",
 		"Open on your phone:",
 		keyStyle.Render("  " + m.url),
 	}, "\n")
@@ -203,18 +295,35 @@ func (m model) renderLive() string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url))
 }
 
-func (m model) footer() string {
-	keys := []string{}
-	if m.ready && !m.running() {
-		keys = append(keys, keyStyle.Render("s")+" start")
+func (m model) renderSettings() string {
+	lines := []string{"Latency profile (buffer):", ""}
+	for i, p := range presets {
+		marker := "  "
+		label := p.label
+		if p.ms == m.bufferMS {
+			marker = okStyle.Render("▸ ")
+			label = okStyle.Render(label)
+		}
+		lines = append(lines, fmt.Sprintf("%s%s %-13s %s", marker, keyStyle.Render(strconv.Itoa(i+1)), label, dimStyle.Render(fmt.Sprintf("%dms — %s", p.ms, p.hint))))
 	}
-	if m.running() {
+	lines = append(lines, "", dimStyle.Render("Applies live while streaming (brief reconnect)."))
+	return boxStyle.Render(strings.Join(lines, "\n"))
+}
+
+func (m model) footer() string {
+	var keys []string
+	switch {
+	case !m.ready:
+		keys = append(keys, keyStyle.Render("g")+" run setup")
+	case !m.running():
+		keys = append(keys, keyStyle.Render("s")+" start")
+	default:
 		keys = append(keys, keyStyle.Render("x")+" stop")
 	}
-	keys = append(keys, keyStyle.Render("r")+" recheck", keyStyle.Render("q")+" quit")
+	keys = append(keys, keyStyle.Render("c")+" settings", keyStyle.Render("r")+" recheck", keyStyle.Render("q")+" quit")
 	hint := ""
 	if m.running() {
-		hint = dimStyle.Render("  (quitting keeps streaming)")
+		hint = dimStyle.Render("   (quitting keeps streaming)")
 	}
 	return dimStyle.Render(strings.Join(keys, "   ")) + hint
 }
