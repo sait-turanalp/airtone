@@ -12,7 +12,7 @@ brew install snapcast sox
 brew install --cask blackhole-2ch   # needs admin + reboot
 
 # build
-git clone https://github.com/very6778/airtone.git
+git clone https://github.com/sait-turanalp/airtone.git
 cd airtone
 go build ./cmd/airtone
 ./airtone version

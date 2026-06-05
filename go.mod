@@ -1,3 +1,3 @@
-module github.com/very6778/airtone
+module github.com/sait-turanalp/airtone
 
 go 1.26.2
