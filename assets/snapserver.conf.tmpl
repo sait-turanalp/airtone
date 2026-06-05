@@ -1,0 +1,17 @@
+# AirTone snapserver config (generated at runtime — placeholders filled by the engine)
+[stream]
+source = pipe://__FIFO__?name=AirTone&sampleformat=__SAMPLEFORMAT__&mode=read
+buffer = __BUFFER__
+codec = __CODEC__
+
+[http]
+enabled = true
+bind_to_address = 0.0.0.0
+port = __HTTP_PORT__
+doc_root = __DOC_ROOT__
+
+[tcp]
+enabled = true
+
+[logging]
+enabled = true
