@@ -60,9 +60,19 @@ See [docs/architecture.md](docs/architecture.md) for the full design and the rea
 
 ## Install
 
-> Homebrew tap is planned — `brew install airtone` is coming.
+```bash
+# 1) AirTone (pulls snapcast, sox, switchaudio-osx automatically)
+brew install sait-turanalp/airtone/airtone
 
-For now, build from source (see [CONTRIBUTING](CONTRIBUTING.md)).
+# 2) the BlackHole driver (one-time; needs admin + a reboot)
+brew install --cask blackhole-2ch
+
+# 3) one-time setup, then launch
+airtone setup
+airtone
+```
+
+Prefer to build from source? See [CONTRIBUTING](CONTRIBUTING.md).
 
 ## Usage
 
