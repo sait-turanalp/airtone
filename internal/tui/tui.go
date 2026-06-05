@@ -37,6 +37,8 @@ type bufferPreset struct {
 }
 
 var presets = []bufferPreset{
+	{"Extreme", 50, "experimental — near-perfect LAN only, will likely stutter"},
+	{"Ultra low", 100, "very low — only on a strong local network"},
 	{"Low latency", 500, "snappier, needs a solid network"},
 	{"Balanced", 1500, "good default"},
 	{"Smooth", 4000, "max stability, more delay"},
@@ -199,8 +201,11 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc", "c":
 		m.screen = screenHome
-	case "1", "2", "3":
+	case "1", "2", "3", "4", "5":
 		i := int(msg.String()[0] - '1')
+		if i < 0 || i >= len(presets) {
+			return m, nil
+		}
 		m.bufferMS = presets[i].ms
 		os.Setenv("AIRTONE_BUFFER", strconv.Itoa(m.bufferMS))
 		if m.running() {
@@ -223,7 +228,7 @@ func (m model) View() string {
 
 	if m.screen == screenSettings {
 		b.WriteString(m.renderSettings())
-		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render("1/2/3")+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
+		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render("1-5")+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
 		return b.String()
 	}
 

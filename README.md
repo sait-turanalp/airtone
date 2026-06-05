@@ -49,6 +49,8 @@ There is no ready-made package that does this cleanly on macOS. The pieces exist
 - **snapserver** — packetizes, encodes, and keeps every client locked to a shared clock; serves the Snapweb player.
 - **Phone** — opens the served web page; no native app.
 
+See [docs/architecture.md](docs/architecture.md) for the full design and the reasoning behind each choice.
+
 ## Requirements
 
 - macOS 11+ (Apple Silicon recommended)
