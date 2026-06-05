@@ -1,0 +1,53 @@
+version: 2
+project_name: airtone
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: airtone
+    main: ./cmd/airtone
+    binary: airtone
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+
+archives:
+  - id: airtone
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+brews:
+  - name: airtone
+    repository:
+      owner: sait-turanalp
+      name: homebrew-airtone
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/sait-turanalp/airtone"
+    description: "Stream your Mac's system audio to your phone in sync — gapless, no app required."
+    license: MIT
+    dependencies:
+      - name: snapcast
+      - name: sox
+      - name: switchaudio-osx
+    caveats: |
+      AirTone also needs the BlackHole 2ch audio driver, which cannot be a
+      formula dependency. Install it once (needs admin + a reboot):
+
+        brew install --cask blackhole-2ch
+
+      Then run:  airtone setup
+
+release:
+  github:
+    owner: sait-turanalp
+    name: airtone
+  prerelease: auto
+
+changelog:
+  use: github
+  sort: asc
