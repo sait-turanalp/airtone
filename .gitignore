@@ -1,0 +1,21 @@
+# Binaries
+/airtone
+/dist/
+*.test
+*.out
+
+# Snapweb is fetched during setup, not vendored
+/snapweb/
+assets/snapweb/
+
+# Runtime / scratch
+*.log
+/tmp/
+
+# macOS
+.DS_Store
+
+# Editor / local
+.idea/
+.vscode/
+*.swp
