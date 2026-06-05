@@ -4,7 +4,9 @@
 package engine
 
 import (
+	"io"
 	"io/fs"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -49,25 +51,35 @@ func materialize() (string, error) {
 	return base, err
 }
 
-// run extracts the engine and executes one of its scripts, streaming output.
-func run(script string) error {
+// run extracts the engine and executes one of its scripts, sending combined
+// output to out (pass os.Stdout for the CLI, a buffer for the TUI).
+func run(script string, out io.Writer) error {
 	base, err := materialize()
 	if err != nil {
 		return err
 	}
 	cmd := exec.Command("/bin/bash", filepath.Join(base, "scripts", script))
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	cmd.Stdin = os.Stdin
+	cmd.Stdout = out
+	cmd.Stderr = out
 	cmd.Env = os.Environ()
 	return cmd.Run()
 }
 
 // Setup creates the Multi-Output device and fetches Snapweb.
-func Setup() error { return run("setup.sh") }
+func Setup(out io.Writer) error { return run("setup.sh", out) }
 
 // Start routes audio and begins streaming.
-func Start() error { return run("start.sh") }
+func Start(out io.Writer) error { return run("start.sh", out) }
 
 // Stop tears down the pipeline and restores the audio output.
-func Stop() error { return run("stop.sh") }
+func Stop(out io.Writer) error { return run("stop.sh", out) }
+
+// LANIP returns the primary outbound IPv4 (no packets sent).
+func LANIP() string {
+	c, err := net.Dial("udp", "8.8.8.8:80")
+	if err != nil {
+		return "127.0.0.1"
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).IP.String()
+}

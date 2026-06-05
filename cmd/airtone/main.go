@@ -3,12 +3,12 @@ package main
 
 import (
 	"fmt"
-	"net"
 	"os"
 
 	"github.com/sait-turanalp/airtone/internal/doctor"
 	"github.com/sait-turanalp/airtone/internal/engine"
 	"github.com/sait-turanalp/airtone/internal/rpc"
+	"github.com/sait-turanalp/airtone/internal/tui"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -29,13 +29,16 @@ Commands:
   doctor    Diagnose the setup (devices, ports, permissions)
   version   Print the version
 
-Run without a command to launch the interactive TUI (coming soon).
+Run without a command to launch the interactive TUI.
 `
 
 func main() {
 	args := os.Args[1:]
 	if len(args) == 0 {
-		fmt.Print(usage)
+		if err := tui.Run(); err != nil {
+			fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -45,11 +48,11 @@ func main() {
 	case "help", "--help", "-h":
 		fmt.Print(usage)
 	case "setup":
-		exitOnErr(engine.Setup())
+		exitOnErr(engine.Setup(os.Stdout))
 	case "start":
-		exitOnErr(engine.Start())
+		exitOnErr(engine.Start(os.Stdout))
 	case "stop":
-		exitOnErr(engine.Stop())
+		exitOnErr(engine.Stop(os.Stdout))
 	case "status":
 		runStatus()
 	case "doctor":
@@ -95,7 +98,7 @@ func runStatus() {
 			fmt.Printf("    - %s (vol %d%%%s)\n", c.Name, c.Percent, muted)
 		}
 	}
-	fmt.Printf("  open on your phone: http://%s:%s\n", lanIP(), httpPort)
+	fmt.Printf("  open on your phone: http://%s:%s\n", engine.LANIP(), httpPort)
 }
 
 func runDoctor() {
@@ -118,14 +121,4 @@ func runDoctor() {
 	}
 	fmt.Println("Some checks failed. Fix the items above, then re-run airtone doctor.")
 	os.Exit(1)
-}
-
-// lanIP returns the primary outbound IPv4 without sending packets.
-func lanIP() string {
-	c, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "127.0.0.1"
-	}
-	defer c.Close()
-	return c.LocalAddr().(*net.UDPAddr).IP.String()
 }
