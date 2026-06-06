@@ -20,6 +20,8 @@ func Register(mux *http.ServeMux) {
 		_, _ = w.Write(remotePage)
 	})
 
+	mux.HandleFunc("/control/events", Events) // SSE push of now-playing state
+
 	mux.HandleFunc("/control/nowplaying", func(w http.ResponseWriter, _ *http.Request) {
 		t, err := NowPlaying()
 		if err != nil {

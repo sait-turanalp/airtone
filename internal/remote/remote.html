@@ -42,8 +42,12 @@
   <div class="volrow">🔈<input id="vol" type="range" min="0" max="100" value="50">🔊</div>
 
 <script>
+const tog = document.querySelector('[data-cmd="toggle"]');
 document.querySelectorAll('[data-cmd]').forEach(b =>
-  b.addEventListener('click', () => fetch('/control/' + b.dataset.cmd, { method: 'POST' })));
+  b.addEventListener('click', () => {
+    if (b === tog) b.textContent = b.textContent === '⏸' ? '▶' : '⏸'; // optimistic, reconciled by SSE
+    fetch('/control/' + b.dataset.cmd, { method: 'POST' });
+  }));
 
 const vol = document.getElementById('vol');
 let dragging = false;
@@ -56,25 +60,20 @@ vol.addEventListener('change', () => {
   dragging = false;
 });
 
-async function poll() {
-  try {
-    const np = await (await fetch('/control/nowplaying')).json();
-    const el = document.getElementById('np');
-    if (np.title) {
-      el.innerHTML = np.title + (np.artist ? ' <span class="artist">— ' + np.artist + '</span>' : '');
-    } else {
-      el.textContent = 'Nothing playing';
-    }
-    const tog = document.querySelector('[data-cmd="toggle"]');
-    if (tog) tog.textContent = np.title ? (np.playing ? '⏸' : '▶') : '⏯';
-    if (!dragging) {
-      const v = await (await fetch('/control/volume')).json();
-      vol.value = v.volume;
-    }
-  } catch (e) { /* server gone — keep last view */ }
+// Now-playing pushes instantly over SSE — no polling.
+new EventSource('/control/events').onmessage = (e) => {
+  const np = JSON.parse(e.data);
+  const el = document.getElementById('np');
+  el.innerHTML = np.title ? (np.title + (np.artist ? ' <span class="artist">— ' + np.artist + '</span>' : '')) : 'Nothing playing';
+  if (tog) tog.textContent = np.title ? (np.playing ? '⏸' : '▶') : '⏯';
+};
+
+async function syncVol() {
+  if (dragging) return;
+  try { vol.value = (await (await fetch('/control/volume')).json()).volume; } catch (e) { /* ignore */ }
 }
-setInterval(poll, 1500);
-poll();
+syncVol();
+setInterval(syncVol, 3000);
 </script>
 </body>
 </html>
