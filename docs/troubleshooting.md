@@ -95,6 +95,19 @@ To actually go lower:
 For perfectly-synced multi-device audio, use **Party mode** instead — sync and low
 latency are different goals.
 
+## Remote control: next/previous "do nothing"
+
+The control bar uses Apple's MediaRemote (via the bundled, permission-free
+mediaremote-adapter). **play/pause and volume work with any app**, but
+**next/previous only act in apps with real track navigation** — Spotify, Apple
+Music. A single video (e.g. one YouTube clip in a browser) has no "next track",
+so the command is accepted but no-ops. This is expected, not a bug.
+
+Volume targets the **built-in speakers** directly (the "AirTone Sync" aggregate
+used while streaming has no master volume, so `osascript set volume` can't drive
+it). If volume seems to do nothing, your audible output isn't the built-in
+speakers.
+
 ## Hard reset
 
 ```

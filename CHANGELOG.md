@@ -3,6 +3,13 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.3.0]
+
+### Added
+- **Remote control**: drive the Mac's music from the phone — now-playing, play/pause/next/prev, and a volume slider — on the Instant page and a standalone `/remote` page.
+- Bundled, permission-free playback control via Apple's MediaRemote (embedded mediaremote-adapter, BSD-3); works offline and with any media app.
+- CoreAudio volume helper that controls the built-in output directly (works while the "AirTone Sync" aggregate is the default device).
+
 ## [0.2.0]
 
 ### Added

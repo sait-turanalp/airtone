@@ -51,6 +51,22 @@ There is no ready-made package that does this cleanly on macOS. The pieces exist
 
 See [docs/architecture.md](docs/architecture.md) for the full design and the reasoning behind each choice.
 
+## Remote control
+
+The Instant page and a standalone **`/remote`** page include a control bar to
+drive the Mac's music from your phone — independent of streaming:
+
+- **Now playing** (title / artist), updated live
+- **⏮ ⏯ ⏭** transport and a **volume** slider
+
+It works with any media app (Spotify, Apple Music, a browser tab) via Apple's
+MediaRemote — no app, no permission, and the helper is bundled so it works
+offline. Volume targets the Mac's built-in speakers.
+
+> **next / previous** only act in apps with real track navigation (Spotify,
+> Apple Music). A single video (one YouTube clip) has no "next track", so those
+> buttons no-op there — play/pause and volume always work.
+
 ## Requirements
 
 - macOS 11+ (Apple Silicon recommended)
