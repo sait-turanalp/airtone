@@ -15,8 +15,9 @@ DEVICE_NAME="${AIRTONE_DEVICE_NAME:-AirTone Sync}"
 CAPTURE_DEVICE="${AIRTONE_CAPTURE_DEVICE:-BlackHole 2ch}"
 
 # Tunables.
-BUFFER="${AIRTONE_BUFFER:-4000}"
-CODEC="${AIRTONE_CODEC:-opus}"
+BUFFER="${AIRTONE_BUFFER:-1000}"
+CODEC="${AIRTONE_CODEC:-opus}"         # opus: bandwidth-friendly for multiple synced clients
+CHUNK_MS="${AIRTONE_CHUNK_MS:-20}"     # snapcast default; latency granularity
 HTTP_PORT="${AIRTONE_HTTP_PORT:-1780}"
 SAMPLE_RATE="${AIRTONE_SAMPLE_RATE:-48000}"
 SAMPLEFORMAT="${SAMPLE_RATE}:16:2"

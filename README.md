@@ -55,7 +55,7 @@ See [docs/architecture.md](docs/architecture.md) for the full design and the rea
 
 - macOS 11+ (Apple Silicon recommended)
 - [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) audio driver
-- `snapcast` and `sox` (installed via Homebrew)
+- `snapcast` and `sox` (installed via Homebrew); `ffmpeg` for Instant mode
 - A phone on the **same Wi-Fi** as the Mac
 
 ## Install
@@ -77,14 +77,26 @@ Prefer to build from source? See [CONTRIBUTING](CONTRIBUTING.md).
 ## Usage
 
 ```
-airtone            # launch the interactive TUI
-airtone start      # start the bridge (headless)
+airtone            # launch the interactive TUI (switch modes with 'm')
+airtone party      # multi-device synced playback (~1s delay)   [alias: start]
+airtone instant    # low-latency mode over WebRTC (~tens of ms)
 airtone status     # live status
 airtone doctor     # diagnose your setup
-airtone stop       # stop and restore audio output
+airtone stop       # stop party mode and restore output
 ```
 
-Start it, play music on the Mac, and **scan the QR code with your phone** — the browser opens the synced stream.
+Start a mode, play audio on the Mac, and **scan the QR code with your phone** — the browser opens the stream. No app either way.
+
+## Two modes
+
+| | **Party** | **Instant** |
+|---|---|---|
+| Transport | snapcast (buffered) | WebRTC (adaptive) |
+| Latency | ~1s (tunable) | ~tens of ms |
+| Multi-device sync | ✅ sample-accurate | ❌ each device independent |
+| Best for | speakers around a room, in sync | one phone, lowest delay |
+
+Both serve a browser page (QR) — no app to install. Instant mode additionally needs `ffmpeg` and, on iOS Safari, bottoms out around ~130ms (a Safari limitation — see [docs/troubleshooting.md](docs/troubleshooting.md)).
 
 ## Honest limitations
 

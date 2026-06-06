@@ -31,6 +31,7 @@ sed -e "s|__FIFO__|$FIFO|g" \
     -e "s|__SAMPLEFORMAT__|$SAMPLEFORMAT|g" \
     -e "s|__BUFFER__|$BUFFER|g" \
     -e "s|__CODEC__|$CODEC|g" \
+    -e "s|__CHUNK_MS__|$CHUNK_MS|g" \
     -e "s|__HTTP_PORT__|$HTTP_PORT|g" \
     -e "s|__DOC_ROOT__|$SNAPWEB_DIR|g" \
     "$ASSETS_DIR/snapserver.conf.tmpl" > "$RUNTIME_CONF"

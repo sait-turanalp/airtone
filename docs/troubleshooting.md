@@ -72,6 +72,29 @@ stutters, suspect the capture, not the client.
   `AIRTONE_BUFFER` (ms) before `airtone start`.
 - Lower = snappier but needs a clean network; higher = rock-solid but more delay.
 
+## Instant mode (WebRTC): why latency bottoms out on iOS
+
+Instant mode uses WebRTC, so the receiver's adaptive jitter buffer (NetEQ)
+dominates end-to-end latency. The page's live readout shows it:
+`net … RTT · buffer … · ~… one-way`.
+
+- **The network is rarely the problem.** On a good LAN, RTT is ~10-30ms.
+- **The jitter buffer is the lever — but on iOS Safari it isn't adjustable.**
+  We confirmed Safari ignores `playoutDelayHint` (Chrome-only), ignores
+  `jitterBufferTarget` (20/40/80 all behaved the same), and does **not** advertise
+  the `playout-delay` RTP header extension. Safari holds its own ~100ms floor, so
+  total lands ~130ms — the realistic A-tier floor for browser-on-iOS.
+- **Don't force it lower.** Aggressive settings (tiny target, a wall-clock pacer)
+  make NetEQ oscillate (100-400ms) — worse than a stable ~130ms. Let the audio
+  source clock (sox) pace delivery; it's steadier than any Go pacer.
+
+To actually go lower:
+- **Android Chrome** honors the buffer hints → typically ~30-60ms on the same LAN.
+- A **native iOS client** (bypassing Safari's NetEQ) is the only way lower on Apple — a roadmap item.
+
+For perfectly-synced multi-device audio, use **Party mode** instead — sync and low
+latency are different goals.
+
 ## Hard reset
 
 ```

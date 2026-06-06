@@ -1,12 +1,16 @@
 // Package tui is the interactive AirTone front-end (Bubble Tea). It orchestrates
-// the engine and shows live status read from the Snapcast control API. It does
-// not touch the audio path itself.
+// the two modes and shows live status; it never touches the audio path itself.
+//
+//   - Party   : multi-device synced playback via snapcast (buffered, ~1s).
+//   - Instant : low-latency single/loose playback via WebRTC (~tens of ms).
 package tui
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"time"
@@ -17,10 +21,25 @@ import (
 
 	"github.com/sait-turanalp/airtone/internal/doctor"
 	"github.com/sait-turanalp/airtone/internal/engine"
+	"github.com/sait-turanalp/airtone/internal/instant"
 	"github.com/sait-turanalp/airtone/internal/rpc"
 )
 
-const httpPort = "1780"
+const partyPort = "1780"
+
+type mode int
+
+const (
+	modeParty mode = iota
+	modeInstant
+)
+
+func (m mode) String() string {
+	if m == modeInstant {
+		return "Instant (low-latency)"
+	}
+	return "Party (synced)"
+}
 
 type screen int
 
@@ -29,7 +48,6 @@ const (
 	screenSettings
 )
 
-// bufferPreset is a latency/smoothness profile (snapserver buffer in ms).
 type bufferPreset struct {
 	label string
 	ms    int
@@ -37,10 +55,8 @@ type bufferPreset struct {
 }
 
 var presets = []bufferPreset{
-	{"Extreme", 50, "experimental — near-perfect LAN only, will likely stutter"},
-	{"Ultra low", 100, "very low — only on a strong local network"},
 	{"Low latency", 500, "snappier, needs a solid network"},
-	{"Balanced", 1500, "good default"},
+	{"Balanced", 1000, "good default"},
 	{"Smooth", 4000, "max stability, more delay"},
 }
 
@@ -60,22 +76,24 @@ type setupDoneMsg struct{ err error }
 
 type model struct {
 	screen   screen
+	mode     mode
 	width    int
 	checks   []doctor.Check
 	ready    bool
 	status   *rpc.Status
-	url      string
 	bufferMS int
-	busy     string // transient status line
-	note     string // transient message (e.g. an error)
+
+	instantOn     bool
+	instantCancel context.CancelFunc
+	instantPrev   string
+
+	busy string
+	note string
 }
 
 // Run launches the interactive TUI.
 func Run() error {
-	m := model{
-		url:      "http://" + engine.LANIP() + ":" + httpPort,
-		bufferMS: currentBuffer(),
-	}
+	m := model{bufferMS: currentBuffer()}
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
@@ -84,7 +102,7 @@ func currentBuffer() int {
 	if v, err := strconv.Atoi(os.Getenv("AIRTONE_BUFFER")); err == nil && v > 0 {
 		return v
 	}
-	return 4000
+	return 1000
 }
 
 func (m model) Init() tea.Cmd {
@@ -119,7 +137,6 @@ func runSetup() tea.Msg {
 	return setupDoneMsg{err: engine.Setup(&b)}
 }
 
-// restartEngine stops then starts so a new buffer value takes effect.
 func restartEngine() tea.Msg {
 	var b bytes.Buffer
 	_ = engine.Stop(&b)
@@ -134,6 +151,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 	case tea.KeyMsg:
 		if msg.String() == "q" || msg.String() == "ctrl+c" {
+			m.stopInstant() // leave audio output as we found it
 			return m, tea.Quit
 		}
 		if m.screen == screenSettings {
@@ -174,27 +192,95 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m model) updateHome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
+	case "m":
+		if m.running() {
+			m.note = "stop first (x)"
+			break
+		}
+		if m.mode == modeParty {
+			m.mode = modeInstant
+		} else {
+			m.mode = modeParty
+		}
+		m.note = ""
 	case "s":
-		if m.ready && m.busy == "" && !m.running() {
-			m.busy, m.note = "Starting…", ""
-			return m, startEngine
-		}
+		return m.start()
 	case "x":
-		if m.running() && m.busy == "" {
-			m.busy, m.note = "Stopping…", ""
-			return m, stopEngine
-		}
+		return m.stop()
 	case "g":
-		if !m.ready && m.busy == "" {
+		if m.mode == modeParty && !m.ready && m.busy == "" {
 			m.busy, m.note = "Running setup…", ""
 			return m, runSetup
 		}
 	case "c":
-		m.screen = screenSettings
+		if m.mode == modeParty {
+			m.screen = screenSettings
+		} else {
+			m.note = "latency presets apply to Party mode"
+		}
 	case "r":
 		return m, checkDoctor
 	}
 	return m, nil
+}
+
+func (m model) start() (tea.Model, tea.Cmd) {
+	if m.busy != "" || m.running() {
+		return m, nil
+	}
+	if m.mode == modeInstant {
+		if !engine.DeviceExists(engine.SyncDevice) {
+			m.note = "run setup first (g)"
+			return m, nil
+		}
+		if _, err := exec.LookPath("ffmpeg"); err != nil {
+			m.note = "instant needs ffmpeg (brew install ffmpeg)"
+			return m, nil
+		}
+		m.instantPrev = engine.CurrentOutput()
+		_ = engine.SetOutput(engine.SyncDevice)
+		ctx, cancel := context.WithCancel(context.Background())
+		m.instantCancel = cancel
+		go func() { _ = instant.Run(ctx, instant.Port) }()
+		m.instantOn, m.note = true, ""
+		return m, nil
+	}
+	// party
+	if m.ready {
+		m.busy, m.note = "Starting…", ""
+		return m, startEngine
+	}
+	return m, nil
+}
+
+func (m model) stop() (tea.Model, tea.Cmd) {
+	if m.mode == modeInstant {
+		m.stopInstant()
+		return m, nil
+	}
+	if m.running() && m.busy == "" {
+		m.busy, m.note = "Stopping…", ""
+		return m, stopEngine
+	}
+	return m, nil
+}
+
+func (m *model) stopInstant() {
+	if !m.instantOn {
+		return
+	}
+	if m.instantCancel != nil {
+		m.instantCancel()
+		m.instantCancel = nil
+	}
+	target := m.instantPrev
+	if target == "" || target == engine.SyncDevice {
+		target = engine.BuiltinOutput()
+	}
+	if target != "" {
+		_ = engine.SetOutput(target)
+	}
+	m.instantOn = false
 }
 
 func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -208,7 +294,7 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.bufferMS = presets[i].ms
 		os.Setenv("AIRTONE_BUFFER", strconv.Itoa(m.bufferMS))
-		if m.running() {
+		if m.mode == modeParty && m.running() {
 			m.busy = "Applying…"
 			return m, restartEngine
 		}
@@ -216,29 +302,47 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// running reports whether the currently-selected mode is active.
 func (m model) running() bool {
+	if m.mode == modeInstant {
+		return m.instantOn
+	}
 	return m.status != nil && len(m.status.Streams) > 0
+}
+
+func (m model) url() string {
+	port := partyPort
+	if m.mode == modeInstant {
+		port = strconv.Itoa(instant.Port)
+	}
+	return "http://" + engine.LANIP() + ":" + port
 }
 
 // --- view ---
 
 func (m model) View() string {
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("AirTone") + "  " + dimStyle.Render("system audio → your phone, in sync") + "\n\n")
+	b.WriteString(titleStyle.Render("AirTone") + "  " + dimStyle.Render(m.mode.String()+"  ·  m to switch") + "\n\n")
 
 	if m.screen == screenSettings {
 		b.WriteString(m.renderSettings())
-		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render("1-5")+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
+		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render(fmt.Sprintf("1-%d", len(presets)))+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
 		return b.String()
 	}
 
 	switch {
+	case m.mode == modeInstant:
+		if m.instantOn {
+			b.WriteString(m.renderInstant())
+		} else {
+			b.WriteString(boxStyle.Render("Instant mode (low-latency). Press " + keyStyle.Render("s") + " to start."))
+		}
 	case !m.ready:
 		b.WriteString(m.renderDoctor())
 	case m.running():
 		b.WriteString(m.renderLive())
 	default:
-		b.WriteString(boxStyle.Render("Ready. Press " + keyStyle.Render("s") + " to start streaming."))
+		b.WriteString(boxStyle.Render("Party mode (synced). Press " + keyStyle.Render("s") + " to start."))
 	}
 
 	if m.busy != "" {
@@ -274,7 +378,6 @@ func (m model) renderLive() string {
 			streamState = liveStyle.Render("● LIVE")
 		}
 	}
-
 	var listeners []string
 	for _, c := range m.status.Clients {
 		if c.Connected {
@@ -285,7 +388,6 @@ func (m model) renderLive() string {
 	if len(listeners) > 0 {
 		listenerBlock = strings.Join(listeners, "\n")
 	}
-
 	info := strings.Join([]string{
 		"Stream:    " + streamState,
 		"Listeners:",
@@ -294,20 +396,30 @@ func (m model) renderLive() string {
 		"Buffer:    " + fmt.Sprintf("%dms", m.bufferMS),
 		"",
 		"Open on your phone:",
-		keyStyle.Render("  " + m.url),
+		keyStyle.Render("  " + m.url()),
 	}, "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url()))
+}
 
-	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url))
+func (m model) renderInstant() string {
+	info := strings.Join([]string{
+		"Status:    " + liveStyle.Render("● running"),
+		fmt.Sprintf("Listeners: %d", instant.Listeners()),
+		"",
+		dimStyle.Render("low latency · no cross-device sync"),
+		"",
+		"Open on your phone:",
+		keyStyle.Render("  " + m.url()),
+	}, "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url()))
 }
 
 func (m model) renderSettings() string {
-	lines := []string{"Latency profile (buffer):", ""}
+	lines := []string{"Latency profile (Party buffer):", ""}
 	for i, p := range presets {
-		marker := "  "
-		label := p.label
+		marker, label := "  ", p.label
 		if p.ms == m.bufferMS {
-			marker = okStyle.Render("▸ ")
-			label = okStyle.Render(label)
+			marker, label = okStyle.Render("▸ "), okStyle.Render(p.label)
 		}
 		lines = append(lines, fmt.Sprintf("%s%s %-13s %s", marker, keyStyle.Render(strconv.Itoa(i+1)), label, dimStyle.Render(fmt.Sprintf("%dms — %s", p.ms, p.hint))))
 	}
@@ -318,16 +430,20 @@ func (m model) renderSettings() string {
 func (m model) footer() string {
 	var keys []string
 	switch {
-	case !m.ready:
+	case m.mode == modeParty && !m.ready:
 		keys = append(keys, keyStyle.Render("g")+" run setup")
 	case !m.running():
 		keys = append(keys, keyStyle.Render("s")+" start")
 	default:
 		keys = append(keys, keyStyle.Render("x")+" stop")
 	}
-	keys = append(keys, keyStyle.Render("c")+" settings", keyStyle.Render("r")+" recheck", keyStyle.Render("q")+" quit")
+	keys = append(keys, keyStyle.Render("m")+" mode")
+	if m.mode == modeParty {
+		keys = append(keys, keyStyle.Render("c")+" settings")
+	}
+	keys = append(keys, keyStyle.Render("r")+" recheck", keyStyle.Render("q")+" quit")
 	hint := ""
-	if m.running() {
+	if m.mode == modeParty && m.running() {
 		hint = dimStyle.Render("   (quitting keeps streaming)")
 	}
 	return dimStyle.Render(strings.Join(keys, "   ")) + hint

@@ -2,11 +2,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
 
 	"github.com/sait-turanalp/airtone/internal/doctor"
 	"github.com/sait-turanalp/airtone/internal/engine"
+	"github.com/sait-turanalp/airtone/internal/instant"
 	"github.com/sait-turanalp/airtone/internal/rpc"
 	"github.com/sait-turanalp/airtone/internal/tui"
 )
@@ -23,8 +28,9 @@ Usage:
 
 Commands:
   setup     One-time setup (Multi-Output device + Snapweb player)
-  start     Start the audio bridge
-  stop      Stop the audio bridge and restore output
+  party     Multi-device synced playback (~1s delay)  [alias: start]
+  instant   Low-latency mode over WebRTC (~tens of ms, single/loose)
+  stop      Stop party mode and restore output
   status    Show live stream and listener status
   doctor    Diagnose the setup (devices, ports, permissions)
   version   Print the version
@@ -49,8 +55,10 @@ func main() {
 		fmt.Print(usage)
 	case "setup":
 		exitOnErr(engine.Setup(os.Stdout))
-	case "start":
+	case "party", "start":
 		exitOnErr(engine.Start(os.Stdout))
+	case "instant":
+		runInstant()
 	case "stop":
 		exitOnErr(engine.Stop(os.Stdout))
 	case "status":
@@ -121,4 +129,45 @@ func runDoctor() {
 	}
 	fmt.Println("Some checks failed. Fix the items above, then re-run airtone doctor.")
 	os.Exit(1)
+}
+
+func runInstant() {
+	if !engine.DeviceExists(engine.SyncDevice) {
+		fmt.Fprintln(os.Stderr, "airtone: not set up yet — run: airtone setup")
+		os.Exit(1)
+	}
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		fmt.Fprintln(os.Stderr, "airtone: instant mode needs ffmpeg — run: brew install ffmpeg")
+		os.Exit(1)
+	}
+
+	prev := engine.CurrentOutput()
+	if err := engine.SetOutput(engine.SyncDevice); err != nil {
+		fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
+		os.Exit(1)
+	}
+	restore := func() {
+		target := prev
+		if target == "" || target == engine.SyncDevice {
+			target = engine.BuiltinOutput() // fall back to speakers
+		}
+		if target != "" {
+			_ = engine.SetOutput(target)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	fmt.Println("AirTone instant mode (WebRTC, low latency)")
+	fmt.Printf("  open on your phone: http://%s:%d\n", engine.LANIP(), instant.Port)
+	fmt.Println("  play audio on the Mac · Ctrl+C to stop")
+
+	err := instant.Run(ctx, instant.Port)
+	restore()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Println("\nstopped, audio restored.")
 }

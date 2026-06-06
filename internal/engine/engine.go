@@ -10,9 +10,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	airtone "github.com/sait-turanalp/airtone"
 )
+
+// SyncDevice is the Multi-Output device both modes route system audio through.
+const SyncDevice = "AirTone Sync"
 
 // Home is the AirTone data dir (override with AIRTONE_HOME).
 func Home() string {
@@ -82,4 +86,52 @@ func LANIP() string {
 	}
 	defer c.Close()
 	return c.LocalAddr().(*net.UDPAddr).IP.String()
+}
+
+// CurrentOutput returns the current system audio output device name.
+func CurrentOutput() string {
+	out, err := exec.Command("SwitchAudioSource", "-c").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// SetOutput selects the system audio output device by name.
+func SetOutput(device string) error {
+	return exec.Command("SwitchAudioSource", "-s", device).Run()
+}
+
+// DeviceExists reports whether an audio device with the exact name is present.
+func DeviceExists(name string) bool {
+	out, err := exec.Command("SwitchAudioSource", "-a").Output()
+	if err != nil {
+		return false
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if strings.TrimSpace(l) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// BuiltinOutput returns the name of the built-in speaker output, if found.
+// Used as a fallback when the previous output can't be restored.
+func BuiltinOutput() string {
+	out, err := exec.Command("SwitchAudioSource", "-a").Output()
+	if err != nil {
+		return ""
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		n := strings.TrimSpace(l)
+		if n == "" || n == SyncDevice {
+			continue
+		}
+		low := strings.ToLower(n)
+		if strings.Contains(low, "speaker") || strings.Contains(low, "hoparl") || strings.Contains(low, "built-in") || strings.Contains(low, "built in") {
+			return n
+		}
+	}
+	return ""
 }
