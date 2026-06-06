@@ -1,11 +1,11 @@
 name: Release
 
-# Cuts a release and updates the Homebrew tap when a v* tag is pushed.
-# Requires repo secret HOMEBREW_TAP_GITHUB_TOKEN — a PAT with `repo` scope on
-# the homebrew-airtone tap repo (the default GITHUB_TOKEN cannot push cross-repo).
+# Manual only. Releases are normally cut locally with `goreleaser release`
+# (which has a token that can push to the tap). Auto-running on tag push would
+# double-create the release and fail here without a HOMEBREW_TAP_GITHUB_TOKEN
+# secret (a PAT with `repo` scope on the homebrew-airtone tap repo).
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write
