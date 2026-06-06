@@ -95,6 +95,27 @@ To actually go lower:
 For perfectly-synced multi-device audio, use **Party mode** instead — sync and low
 latency are different goals.
 
+## Remote control: a button "does nothing"
+
+The control bar uses Apple's MediaRemote (via the bundled, permission-free
+mediaremote-adapter). How well transport works depends on the **app's**
+MediaRemote support:
+
+- **Spotify / Apple Music** — reliable: play/pause and next/previous all work.
+- **Browser media (YouTube, etc.)** — flaky: commands are sent (the bar gets a
+  success), but the browser may apply them late or ignore them, and a single
+  video has no "next/previous track" at all. play/pause may need a second tap.
+- **Volume** always works (it's a direct CoreAudio call, not MediaRemote).
+
+The ⏯ button shows ▶ or ⏸ to reflect the current state. If transport feels
+unreliable, you're almost certainly controlling a browser tab — use a real
+music app for solid behavior. This is the app's behavior, not an AirTone bug.
+
+Volume targets the **built-in speakers** directly (the "AirTone Sync" aggregate
+used while streaming has no master volume, so `osascript set volume` can't drive
+it). If volume seems to do nothing, your audible output isn't the built-in
+speakers.
+
 ## Hard reset
 
 ```

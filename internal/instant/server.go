@@ -25,14 +25,11 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 
-	_ "embed"
+	"github.com/sait-turanalp/airtone/internal/remote"
 )
 
 // Port is the HTTP port for the Instant-mode page and signaling.
 const Port = 1781
-
-//go:embed instant.html
-var pageHTML []byte
 
 // listeners counts currently-connected browsers (for the TUI).
 var listeners atomic.Int64
@@ -52,6 +49,8 @@ const capturePipeline = `sox -q -t coreaudio "BlackHole 2ch" -t raw -b 16 -e sig
 
 // Run starts the capture pipeline and the HTTP/WebRTC server until ctx is done.
 func Run(ctx context.Context, port int) error {
+	go func() { _ = remote.Warmup() }() // compile/extract control helpers before the phone connects
+
 	track, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio", "airtone",
@@ -65,13 +64,18 @@ func Run(ctx context.Context, port int) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" { // the control page is the single page; nothing else is served
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(pageHTML)
+		_, _ = w.Write(remote.Page())
 	})
 	mux.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {
 		handleOffer(w, r, track)
 	})
+	remote.Register(mux) // /control/* — drive the Mac's playback from the phone
 
 	srv := &http.Server{Addr: portAddr(port), Handler: mux}
 	go func() {

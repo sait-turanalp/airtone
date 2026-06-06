@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
+<title>AirTone — Remote</title>
+<style>
+  :root { color-scheme: dark; --bg-top: #3a3a3c; --bg-bot: #252526; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  body {
+    margin: 0; min-height: 100vh; min-height: 100dvh;
+    color: #fff; font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
+    background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bot) 85%);
+    transition: background 0.8s ease;
+    display: flex; flex-direction: column; align-items: center;
+    padding: max(24px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom));
+    gap: 22px; overflow: hidden;
+  }
+  .wrap { width: 100%; max-width: 372px; display: flex; flex-direction: column; gap: 22px; margin: auto 0; position: relative; z-index: 1; }
+
+  /* Ambient background — technique ported from frigopedro/Apple-Music-Background:
+     a grid of the cover's dominant colours placed at random, blurred heavily into
+     soft regions (not a flat gradient). The frosted card over it picks the colours
+     up through its backdrop-filter — that's the vibrancy. A slow breathing drift
+     adds the subtle liveliness. */
+  .ambient { position: fixed; inset: 0; z-index: 0; overflow: hidden; background: var(--bg-bot); }
+  .grid { position: absolute; inset: -16%; width: 132%; height: 132%;
+          display: grid; grid-template-columns: repeat(6, 1fr); grid-template-rows: repeat(6, 1fr);
+          filter: blur(82px) saturate(1.5); will-change: transform;
+          animation: drift 26s ease-in-out infinite alternate; }
+  .grid > i { display: block; }
+  .ambient::after { content: ""; position: absolute; inset: 0;
+          background: radial-gradient(135% 100% at 50% 12%, transparent 45%, rgba(0,0,0,0.34) 100%); }
+  @keyframes drift { from { transform: scale(1) rotate(0deg); } to { transform: scale(1.12) rotate(5deg); } }
+
+  .artbox { position: relative; width: 100%; aspect-ratio: 1/1; border-radius: 16px; overflow: hidden; background: rgba(255,255,255,0.06); box-shadow: 0 18px 44px rgba(0,0,0,0.45); }
+  .art-layer { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; opacity: 0; transition: opacity 0.7s ease; }
+  /* shown when there's no real cover (e.g. a browser tab with no media art) */
+  .art-ph { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            opacity: 0; transition: opacity 0.5s ease;
+            background: linear-gradient(155deg, rgba(255,255,255,0.13), rgba(255,255,255,0.03)); }
+  .art-ph svg { width: 30%; height: 30%; color: #fff; opacity: 0.5; filter: drop-shadow(0 2px 7px rgba(0,0,0,0.35)); }
+
+  /* Frosted "ice" glass — generator.ui.glass technique (blur + saturate + thin rim),
+     but an icy light tint so the backdrop colors show through like real Apple glass */
+  .card {
+    position: relative; display: flex; flex-direction: column; gap: 14px;
+    padding: 16px 18px; border-radius: 24px; overflow: hidden;
+    background-color: rgba(255, 255, 255, 0.10);
+    -webkit-backdrop-filter: blur(11px) saturate(115%); backdrop-filter: blur(11px) saturate(115%);
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+  }
+  /* keep white text/icons legible on the light frost */
+  .title, .artist, .time { text-shadow: 0 1px 2px rgba(0, 0, 0, 0.35); }
+  .ic svg, .eq i, .volume svg { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30)); }
+
+  .head { position: relative; display: flex; flex-direction: column; align-items: center; padding: 4px 26px 0; }
+  .title { font-weight: 700; font-size: 18px; line-height: 1.15; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .artist { font-size: 13px; opacity: 0.7; margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .eq { position: absolute; top: 4px; right: 0; display: flex; align-items: flex-end; gap: 2px; height: 16px; opacity: 0.9; }
+  .eq i { width: 2.5px; background: #fff; border-radius: 2px; height: 30%; animation: eq 0.9s ease-in-out infinite; }
+  .eq i:nth-child(2){ animation-delay: .25s } .eq i:nth-child(3){ animation-delay: .5s } .eq i:nth-child(4){ animation-delay: .15s }
+  body:not(.playing) .eq i { animation-play-state: paused; height: 30%; }
+  @keyframes eq { 0%,100%{height:25%} 50%{height:100%} }
+
+  .row { display: flex; align-items: center; gap: 10px; }
+  .time { font-size: 11px; opacity: 0.85; min-width: 30px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .time.r { text-align: right; }
+
+  /* Apple-style scrubber: dimmed + thin at rest, brightens and thickens on
+     touch/drag. Thickness animates real height so the pill shape is preserved
+     at every size (no stretched corners). A capped scaleX adds the elastic
+     rubber-band past the ends, with a springy ease for the snap-back. */
+  .track { position: relative; flex: 1; height: 24px; display: flex; align-items: center; cursor: pointer; touch-action: none; }
+  .rail { position: relative; width: 100%; height: 6px; border-radius: 99px; overflow: hidden;
+          background: rgba(255,255,255,0.32); opacity: 0.6;
+          transform-origin: center; will-change: height, transform, opacity, box-shadow;
+          transition: height 0.45s cubic-bezier(0.34,1.56,0.64,1),  /* soft springy pop */
+                      transform 0.3s cubic-bezier(0.34,1.5,0.5,1),
+                      opacity 0.35s ease,
+                      box-shadow 0.4s ease; }
+  .fill { position: absolute; left: 0; top: 0; height: 100%; border-radius: 99px; background: #fff; width: 0%; }
+  .track:hover .rail { height: 10px; opacity: 1; }
+  .track.grabbing .rail { height: 12px; opacity: 1; box-shadow: 0 3px 12px rgba(0,0,0,0.30); }
+
+  .controls { display: flex; align-items: center; justify-content: space-between; padding: 2px 4px 0; }
+  .ic { appearance: none; border: 0; background: transparent; color: #fff; padding: 0; cursor: pointer; display: flex; align-items: center;
+        will-change: transform; transition: transform 0.26s cubic-bezier(0.34,1.4,0.5,1), opacity 0.22s ease; }
+  .ic.press { transform: scale(0.86); }
+  .side { opacity: 0.85; }
+  .side.press { opacity: 0.55; }
+  .mid { display: flex; align-items: center; gap: 30px; }
+  .mid .ic svg { filter: drop-shadow(0 1px 1px rgba(0,0,0,0.25)); }
+
+  .volume { display: flex; align-items: center; gap: 12px; padding: 0 10px; }
+  .volume svg { flex: 0 0 auto; opacity: 0.9; }
+</style>
+</head>
+<body>
+  <div class="ambient" aria-hidden="true"><div class="grid"></div></div>
+  <div class="wrap">
+    <div class="artbox">
+      <img id="artA" class="art-layer" alt="" />
+      <img id="artB" class="art-layer" alt="" />
+      <div id="artph" class="art-ph" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="head">
+        <div id="title" class="title">—</div>
+        <div id="artist" class="artist"></div>
+        <div class="eq" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+      </div>
+
+      <div class="row">
+        <span id="elapsed" class="time">0:00</span>
+        <div id="seek" class="track"><div class="rail"><div id="seekfill" class="fill"></div></div></div>
+        <span id="remain" class="time r">0:00</span>
+      </div>
+
+      <div class="controls">
+        <button class="ic side" aria-label="favorite">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"><path d="M12 3.5l2.6 5.4 5.9.7-4.4 4 1.2 5.8L12 16.9 6.7 19.4 7.9 13.6 3.5 9.6l5.9-.7z"/></svg>
+        </button>
+        <div class="mid">
+          <button class="ic" data-cmd="prev" aria-label="previous">
+            <svg width="30" height="22" viewBox="0 0 30 22" fill="currentColor"><path d="M13.5 3.2 2.8 10.2a1 1 0 0 0 0 1.6l10.7 7c.7.46 1.6-.05 1.6-.86V4.06c0-.8-.9-1.32-1.6-.86z"/><path d="M27.6 3.2 16.9 10.2a1 1 0 0 0 0 1.6l10.7 7c.7.46 1.6-.05 1.6-.86V4.06c0-.8-.9-1.32-1.6-.86z"/></svg>
+          </button>
+          <button id="toggle" class="ic" data-cmd="toggle" aria-label="play/pause"></button>
+          <button class="ic" data-cmd="next" aria-label="next">
+            <svg width="30" height="22" viewBox="0 0 30 22" fill="currentColor"><path d="M16.5 3.2 27.2 10.2a1 1 0 0 1 0 1.6l-10.7 7c-.7.46-1.6-.05-1.6-.86V4.06c0-.8.9-1.32 1.6-.86z"/><path d="M2.4 3.2 13.1 10.2a1 1 0 0 1 0 1.6l-10.7 7C1.7 19.26.8 18.75.8 17.94V4.06c0-.8.9-1.32 1.6-.86z"/></svg>
+          </button>
+        </div>
+        <button class="ic side" aria-label="airplay">
+          <svg width="20" height="20" viewBox="56 0 46 46" fill="currentColor" aria-hidden="true"><path d="M64.63 44.3c-.56.65-.1 1.66.76 1.66h27.19c.86 0 1.32-1.01.76-1.66l-13.6-15.67a.998.998 0 0 0-1.41-.1c-.04.04-13.7 15.77-13.71 15.77Z"/><path d="M70.99 22.98c0-4.41 3.59-7.99 7.99-7.99s7.99 3.59 7.99 7.99c0 2.64-1.29 4.96-3.26 6.42l1.64 1.89c2.5-1.92 4.12-4.92 4.12-8.32 0-5.79-4.69-10.49-10.49-10.49s-10.49 4.69-10.49 10.49c0 3.4 1.62 6.4 4.12 8.32l1.64-1.89c-1.97-1.46-3.26-3.79-3.26-6.42Z"/><path d="M64.99 22.98c0-7.71 6.27-13.99 13.99-13.99s13.99 6.27 13.99 13.99c0 4.44-2.09 8.39-5.32 10.96l1.65 1.9c3.77-3.02 6.17-7.65 6.17-12.85 0-9.1-7.38-16.48-16.48-16.48s-16.48 7.37-16.48 16.47c0 5.2 2.42 9.83 6.17 12.85l1.65-1.9c-3.24-2.57-5.32-6.51-5.32-10.96Z"/><path d="M58.5 22.98c0-11.29 9.19-20.48 20.48-20.48s20.48 9.19 20.48 20.48c0 6.39-2.95 12.11-7.55 15.86l1.65 1.9c5.13-4.22 8.4-10.61 8.4-17.76C101.96 10.29 91.67 0 78.98 0S56 10.29 56 22.98c0 7.16 3.28 13.55 8.4 17.76l1.65-1.9c-4.61-3.76-7.55-9.47-7.55-15.86Z"/></svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="volume">
+      <svg width="18" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9z"/></svg>
+      <div id="voltrack" class="track"><div class="rail"><div id="volfill" class="fill"></div></div></div>
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 9v6h4l5 4V5L7 9z"/><path d="M16 8.5a5 5 0 0 1 0 7M18.5 6a8.5 8.5 0 0 1 0 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+    </div>
+  </div>
+
+<script src="/control/colorthief.js"></script>
+<script>
+const $ = (id) => document.getElementById(id);
+const PLAY = '<svg width="30" height="34" viewBox="0 0 30 34" fill="currentColor"><path d="M6 4.5 25 16a1.2 1.2 0 0 1 0 2L6 29.5c-.9.55-2-.1-2-1.1V5.6c0-1 1.1-1.65 2-1.1z"/></svg>';
+const PAUSE = '<svg width="30" height="34" viewBox="0 0 30 34" fill="currentColor"><rect x="5" y="4" width="6.5" height="26" rx="2.4"/><rect x="18.5" y="4" width="6.5" height="26" rx="2.4"/></svg>';
+const fmt = (s) => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s/60) + ':' + String(s%60).padStart(2,'0'); };
+
+const state = { title:'', artist:'', playing:false, duration:0, elapsed:0 };
+let lastArtKey = '';
+const toggle = $('toggle');
+
+function renderPlay() { toggle.innerHTML = state.playing ? PAUSE : PLAY; document.body.classList.toggle('playing', state.playing); }
+function renderProgress() {
+  $('elapsed').textContent = fmt(state.elapsed);
+  $('remain').textContent = state.duration ? '-' + fmt(state.duration - state.elapsed) : fmt(0);
+  $('seekfill').style.width = state.duration ? Math.min(100, state.elapsed/state.duration*100) + '%' : '0%';
+}
+
+// tactile press feedback on every button (GPU-composited scale, springy easing)
+document.querySelectorAll('.ic').forEach(b => {
+  b.addEventListener('pointerdown', () => b.classList.add('press'));
+  ['pointerup','pointercancel','pointerleave'].forEach(ev => b.addEventListener(ev, () => b.classList.remove('press')));
+});
+
+document.querySelectorAll('[data-cmd]').forEach(b =>
+  b.addEventListener('click', () => {
+    if (b === toggle) { state.playing = !state.playing; renderPlay(); }
+    fetch('/control/' + b.dataset.cmd, { method: 'POST' });
+  }));
+
+// rate-limited sender: live updates while dragging without flooding the helper
+// process; .flush(v) fires the exact final value immediately on release.
+function rateLimited(send, gap) {
+  let last = 0, timer = null, pending = null;
+  const fire = v => { last = performance.now(); send(v); };
+  const f = v => {
+    pending = v; const now = performance.now();
+    if (now - last >= gap) { fire(v); pending = null; }
+    else if (!timer) timer = setTimeout(() => { timer = null; if (pending != null) { fire(pending); pending = null; } }, gap - (now - last));
+  };
+  f.flush = v => { if (timer) { clearTimeout(timer); timer = null; } pending = null; fire(v); };
+  return f;
+}
+const postJSON = (url, body) => fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
+
+// Elastic, RELATIVE-drag slider. Grabbing anywhere does NOT jump the value to the
+// finger — it anchors at the current value and tracks finger MOVEMENT from there
+// (like the iOS scrubber): drag forward scrubs forward from where the playhead
+// already is, following the hand's direction, not where it landed. Pointer-
+// captured so it keeps tracking off-edge; rail thickens (CSS) and rubber-bands
+// elastically past the ends.
+function makeSlider(track, { value, live, commit, enabled }) {
+  const rail = track.querySelector('.rail');
+  let dragging = false, startX = 0, startVal = 0;
+  const widthOf = () => track.getBoundingClientRect().width || 1;
+  const clamp = x => Math.max(0, Math.min(1, x));
+  const at = e => startVal + (e.clientX - startX) / widthOf(); // value relative to the grab point
+  const setRail = raw => {
+    const w = widthOf();
+    const over = raw > 1 ? raw - 1 : (raw < 0 ? raw : 0); // signed fraction past an end
+    const ext = Math.min(6, Math.abs(over) * w * 0.4);     // px, hard-capped at 6
+    rail.style.transformOrigin = over > 0 ? 'left center' : (over < 0 ? 'right center' : 'center');
+    rail.style.transform = ext ? 'scaleX(' + (1 + ext / w).toFixed(4) + ')' : '';
+  };
+  track.addEventListener('pointerdown', e => {
+    if (enabled && !enabled()) return;
+    dragging = true; startX = e.clientX; startVal = value(); // anchor at current value — no jump
+    track.classList.add('grabbing'); track.setPointerCapture(e.pointerId);
+  });
+  track.addEventListener('pointermove', e => {
+    if (!dragging) return; const raw = at(e); setRail(raw); live(clamp(raw));
+  });
+  ['pointerup','pointercancel'].forEach(ev => track.addEventListener(ev, e => {
+    if (!dragging) return; dragging = false; track.classList.remove('grabbing');
+    rail.style.transform = ''; rail.style.transformOrigin = ''; // springs back via CSS
+    commit(clamp(at(e)));
+  }));
+  return { dragging: () => dragging };
+}
+
+// seek — relative scrub from the current playhead; the jump fires once, on release
+const seekSlider = makeSlider($('seek'), {
+  enabled: () => state.duration > 0,
+  value:  () => state.duration ? state.elapsed / state.duration : 0,
+  live:   p => { state.elapsed = p * state.duration; renderProgress(); },
+  commit: p => { state.elapsed = p * state.duration; renderProgress(); postJSON('/control/seek', { position: state.elapsed }); },
+});
+
+// volume — relative drag from the current level, audible LIVE while dragging;
+// tight throttle keeps it instant without backlogging the volume helper.
+const volfill = $('volfill');
+let volCur = 0;
+const showVol = v => { volCur = v; volfill.style.width = v + '%'; };
+const sendVol = rateLimited(v => postJSON('/control/volume', { volume: v }), 45);
+const volSlider = makeSlider($('voltrack'), {
+  value:  () => volCur / 100,
+  live:   p => { const v = Math.round(p * 100); showVol(v); sendVol(v); },
+  commit: p => { const v = Math.round(p * 100); showVol(v); sendVol.flush(v); },
+});
+async function syncVol(){ if (volSlider.dragging()) return; try { showVol((await (await fetch('/control/volume')).json()).volume); } catch(e){} }
+
+const artLayers = [$('artA'), $('artB')];
+let artVisible = 0;
+
+// Ambient grid (frigopedro technique): 36 cells, each a random dominant colour.
+const grid = document.querySelector('.grid'), artph = $('artph');
+const NEUTRAL = [[52,54,62],[40,42,49],[60,63,72],[34,36,42]]; // calm slate when no art
+function paintAmbient(palette) {
+  if (!grid.children.length) for (let i = 0; i < 36; i++) grid.appendChild(document.createElement('i'));
+  for (const cell of grid.children) {
+    const c = palette[Math.floor(Math.random() * palette.length)] || [60, 60, 64];
+    cell.style.background = `rgb(${c[0]},${c[1]},${c[2]})`;
+  }
+}
+// No real cover (browser tab / missing art): show the placeholder + a calm bg.
+function showNoArt() {
+  artph.style.opacity = 1;
+  artLayers.forEach(l => l.style.opacity = 0);
+  document.documentElement.style.setProperty('--bg-bot', '#1c1d22');
+  paintAmbient(NEUTRAL);
+}
+
+function applyArtwork() {
+  const key = state.title + '|' + state.artist;
+  if (key === lastArtKey) return; lastArtKey = key;
+  const img = new Image(); img.crossOrigin = 'anonymous';
+  img.onload = () => {
+    try {
+      const ct = new ColorThief();
+      const [r,g,b] = ct.getColor(img);
+      document.documentElement.style.setProperty('--bg-top', `rgb(${r},${g},${b})`);
+      document.documentElement.style.setProperty('--bg-bot', `rgb(${(r*0.63)|0},${(g*0.63)|0},${(b*0.63)|0})`);
+      let palette = []; try { palette = ct.getPalette(img, 5) || []; } catch(e) {}
+      paintAmbient(palette.length ? palette : [[r,g,b]]); // dominant-colour grid
+    } catch(e) {}
+    // crossfade: the old cover stays until the new one is decoded, then fades
+    artph.style.opacity = 0;
+    const next = artLayers[1 - artVisible];
+    next.src = img.src;
+    next.style.opacity = 1;
+    artLayers[artVisible].style.opacity = 0;
+    artVisible = 1 - artVisible;
+  };
+  img.onerror = showNoArt; // 404 from /control/artwork (no real cover)
+  img.src = '/control/artwork?v=' + encodeURIComponent(key);
+}
+
+new EventSource('/control/events').onmessage = (e) => {
+  const np = JSON.parse(e.data);
+  state.title = np.title || ''; state.artist = np.artist || '';
+  state.playing = !!np.playing; state.duration = np.duration || 0;
+  if (!seekSlider.dragging()) state.elapsed = np.elapsedTime || 0;
+  $('title').textContent = state.title || 'Nothing playing';
+  $('artist').textContent = state.artist;
+  renderPlay(); if (!seekSlider.dragging()) renderProgress();
+  if (state.title) applyArtwork();
+};
+setInterval(() => { if (state.playing && state.duration && !seekSlider.dragging()) { state.elapsed = Math.min(state.duration, state.elapsed+1); renderProgress(); } }, 1000);
+syncVol(); setInterval(syncVol, 3000);
+renderPlay();
+</script>
+</body>
+</html>
