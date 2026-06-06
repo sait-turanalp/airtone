@@ -25,7 +25,7 @@
   <img src="ss.png" alt="AirTone — the phone web remote, an iOS-26 liquid-glass player" width="460">
 </p>
 
-AirTone turns your Mac into a tiny local audio broadcaster. Whatever's playing — Spotify, YouTube, any browser tab — keeps playing on the Mac **and** streams to your phone at the same time, in sync. The phone just opens a web page (scan a QR code) — **nothing to install** — and doubles as a polished remote for your Mac's playback.
+AirTone is a local audio **engine** for macOS. It unifies a virtual sound driver, a gapless capture stage, and a sample-accurate sync server into a single tool — so whatever plays on your Mac also plays on your phone, perfectly in sync. The phone just opens a web page (scan a QR code) — **nothing to install** — and doubles as a polished remote for your Mac's playback.
 
 > **Why this exists.** macOS has no built-in way to send arbitrary *system* audio to a phone's browser, in sync — AirPlay only targets Apple speakers and devices, and no open-source project packaged this end to end. The hard part isn't the network; it's **source-timing drift**: a naive capture drops samples and forces the sync engine to re-lock several times a second, so the audio stutters. AirTone fixes it at the root — **gapless `sox` capture with BlackHole pinned as the master clock** — and hides the whole pipeline behind one command. The full diagnostic story is in [docs/troubleshooting.md](docs/troubleshooting.md).
 
@@ -74,20 +74,23 @@ Open the page (or scan the QR) — there is nothing to install on the phone.
 
 ## How it works
 
+AirTone is a single **engine**: it unifies a virtual sound driver, a gapless capture stage, and a sample-accurate sync server, so you install and run *one* thing — not five.
+
 ```mermaid
-flowchart TD
-  A["🎵 Any app on the Mac<br/>Spotify · YouTube · a browser tab"] --> B["AirTone Sync<br/>Multi-Output device"]
-  B --> C["🔊 Mac speakers<br/>you still hear it"]
-  B --> D["BlackHole<br/>virtual cable · master clock"]
-  D --> E["sox<br/>gapless CoreAudio capture"]
-  E --> F["snapserver<br/>Opus · buffered · sample-synced"]
-  F --> G["📱 Phone browser<br/>scan a QR · no app"]
+flowchart LR
+  SRC["🎵 Mac audio<br/>Spotify · YouTube · any app"] --> E
+  subgraph E ["⚙️ AirTone engine"]
+    direction TB
+    T["Tap + split<br/>capture without silencing the Mac"]
+    C["Gapless capture<br/>sample-accurate, drift-free"]
+    S["Encode + sync<br/>Opus · one shared clock"]
+    T --> C --> S
+  end
+  E --> SPK["🔊 Mac speakers"]
+  E --> PH["📱 Your phone<br/>browser · no app"]
 ```
 
-- **BlackHole** — a virtual audio cable, so system audio can be captured.
-- **Multi-Output** — sends sound to the speakers *and* BlackHole at once, so the Mac is never silenced.
-- **sox** — reads BlackHole gaplessly (where naive `ffmpeg` setups drop samples and stutter).
-- **snapserver** — encodes and keeps every client locked to one shared clock.
+**Built on** the best open pieces — [BlackHole](https://github.com/ExistentialAudio/BlackHole), [sox](http://sox.sourceforge.net), [Snapcast](https://github.com/badaix/snapcast), Apple's MediaRemote, and WebRTC — orchestrated into one drift-free pipeline. The part AirTone owns is the **timing**: a gapless capture pinned to a master clock, so nothing stutters.
 
 Full design notes: [docs/architecture.md](docs/architecture.md).
 
