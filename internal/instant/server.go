@@ -70,6 +70,7 @@ func Run(ctx context.Context, port int) error {
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store") // never serve a stale page to the phone
 		_, _ = w.Write(remote.Page())
 	})
 	mux.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {

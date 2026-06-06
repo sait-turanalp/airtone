@@ -82,18 +82,22 @@ func resolveFor(title, artist, bundle string) ([]byte, string) {
 	return data, mime
 }
 
+// browserArtMinBytes separates a real browser cover (e.g. a YouTube video
+// thumbnail, ~10KB+) from the app-icon fallback (e.g. the Chrome logo, ~4KB)
+// that MediaRemote returns when a page sets no media artwork.
+const browserArtMinBytes = 6000
+
 // fetchArtwork prefers the high-res iTunes cover; hiRes reports whether it got one.
 func fetchArtwork(title, artist, bundle string) (data []byte, mime string, hiRes bool) {
 	if d, m := itunesArtwork(artist, title); d != nil {
 		return d, m, true
 	}
-	// No catalogue match. For browsers/generic sources the MediaRemote "thumbnail"
-	// is just the app icon (e.g. the Chrome logo) — it looks bad and poisons the
-	// colour background — so return nothing and let the UI show its placeholder.
-	if isBrowserBundle(bundle) {
+	d, m, _ := Artwork() // a music app embeds the cover; a browser gives a thumbnail or its app icon
+	// For browsers, suppress ONLY the tiny app-icon fallback (so the placeholder
+	// shows) but keep a genuine thumbnail like YouTube's video cover.
+	if isBrowserBundle(bundle) && len(d) < browserArtMinBytes {
 		return nil, "", false
 	}
-	d, m, _ := Artwork() // a real music app embeds the actual cover here
 	return d, m, false
 }
 

@@ -3,10 +3,16 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, viewport-fit=cover">
-<title>AirTone — Remote</title>
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="AirTone">
+<title>AirTone</title>
 <style>
   :root { color-scheme: dark; --bg-top: #3a3a3c; --bg-bot: #252526; }
-  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent;
+      -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+  button:focus, button:focus-visible, .track:focus { outline: none; }
   body {
     margin: 0; min-height: 100vh; min-height: 100dvh;
     color: #fff; font-family: -apple-system, "SF Pro Text", system-ui, sans-serif;
@@ -56,8 +62,8 @@
   .ic svg, .eq i, .volume svg { filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.30)); }
 
   .head { position: relative; display: flex; flex-direction: column; align-items: center; padding: 4px 26px 0; }
-  .title { font-weight: 700; font-size: 18px; line-height: 1.15; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .artist { font-size: 13px; opacity: 0.7; margin-top: 1px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .title { font-weight: 700; font-size: 18px; line-height: 1.15; min-height: 21px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .artist { font-size: 13px; opacity: 0.7; margin-top: 1px; min-height: 16px; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .eq { position: absolute; top: 4px; right: 0; display: flex; align-items: flex-end; gap: 2px; height: 16px; opacity: 0.9; }
   .eq i { width: 2.5px; background: #fff; border-radius: 2px; height: 30%; animation: eq 0.9s ease-in-out infinite; }
   .eq i:nth-child(2){ animation-delay: .25s } .eq i:nth-child(3){ animation-delay: .5s } .eq i:nth-child(4){ animation-delay: .15s }
@@ -65,7 +71,7 @@
   @keyframes eq { 0%,100%{height:25%} 50%{height:100%} }
 
   .row { display: flex; align-items: center; gap: 10px; }
-  .time { font-size: 11px; opacity: 0.85; min-width: 30px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+  .time { font-size: 11px; opacity: 0.85; width: 44px; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
   .time.r { text-align: right; }
 
   /* Apple-style scrubber: dimmed + thin at rest, brightens and thickens on
@@ -307,6 +313,15 @@ new EventSource('/control/events').onmessage = (e) => {
 setInterval(() => { if (state.playing && state.duration && !seekSlider.dragging()) { state.elapsed = Math.min(state.duration, state.elapsed+1); renderProgress(); } }, 1000);
 syncVol(); setInterval(syncVol, 3000);
 renderPlay();
+
+// f → toggle fullscreen (desktop / Android). iOS Safari has no element-fullscreen
+// API — there, "Add to Home Screen" opens standalone fullscreen via the meta tags.
+document.addEventListener('keydown', e => {
+  if (e.key === 'f' || e.key === 'F') {
+    if (document.fullscreenElement) document.exitFullscreen && document.exitFullscreen();
+    else document.documentElement.requestFullscreen && document.documentElement.requestFullscreen();
+  }
+});
 </script>
 </body>
 </html>
