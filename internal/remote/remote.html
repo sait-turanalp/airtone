@@ -65,6 +65,8 @@ async function poll() {
     } else {
       el.textContent = 'Nothing playing';
     }
+    const tog = document.querySelector('[data-cmd="toggle"]');
+    if (tog) tog.textContent = np.title ? (np.playing ? '⏸' : '▶') : '⏯';
     if (!dragging) {
       const v = await (await fetch('/control/volume')).json();
       vol.value = v.volume;
