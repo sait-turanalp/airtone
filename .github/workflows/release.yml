@@ -1,10 +1,13 @@
 name: Release
 
-# Manual only. Releases are normally cut locally with `goreleaser release`
-# (which has a token that can push to the tap). Auto-running on tag push would
-# double-create the release and fail here without a HOMEBREW_TAP_GITHUB_TOKEN
-# secret (a PAT with `repo` scope on the homebrew-airtone tap repo).
+# Auto-releases on a v* tag (and can be run manually). Pushing the binaries +
+# updating the Homebrew tap both work because the repo provides a
+# HOMEBREW_TAP_GITHUB_TOKEN secret with push access to the homebrew-airtone repo.
+# Release ONLY via this workflow — do not also run `goreleaser release` locally,
+# or you get a duplicate release for the same tag.
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
