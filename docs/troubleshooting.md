@@ -116,6 +116,18 @@ used while streaming has no master volume, so `osascript set volume` can't drive
 it). If volume seems to do nothing, your audible output isn't the built-in
 speakers.
 
+## "The macOS volume keys / menu slider don't change the sound while streaming"
+
+Expected — it's a macOS limitation, not an AirTone bug. While streaming, the
+system output is the **AirTone Sync Multi-Output device**, and macOS Multi-Output
+(and Aggregate) devices have **no master volume**: the volume keys grey out and
+the menu slider is a no-op for them.
+
+Control volume from the **AirTone app's slider** instead — it sets the built-in
+speakers' volume directly via CoreAudio, so it always works. (The keys/menu work
+again as soon as you switch back to a normal output, which AirTone does for you
+on exit.)
+
 ## Hard reset
 
 ```
