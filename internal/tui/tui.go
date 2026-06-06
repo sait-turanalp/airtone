@@ -14,8 +14,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
+	"syscall"
 	"time"
 
 	"github.com/charmbracelet/bubbles/help"
@@ -109,6 +112,41 @@ type model struct {
 	note string // inline message; cleared on next interaction
 }
 
+// Terminal close (SIGHUP) bypasses Bubble Tea's quit handling, so Instant arms a
+// best-effort output restore that fires on the way out. Party never arms it — it
+// is meant to keep streaming after the UI closes.
+var (
+	restoreMu    sync.Mutex
+	restoreArmed bool
+	restoreTo    string
+)
+
+func armRestore(prev string) {
+	t := prev
+	if t == "" || t == engine.SyncDevice {
+		t = engine.BuiltinOutput()
+	}
+	restoreMu.Lock()
+	restoreTo, restoreArmed = t, true
+	restoreMu.Unlock()
+}
+
+func disarmRestore() {
+	restoreMu.Lock()
+	restoreArmed = false
+	restoreMu.Unlock()
+}
+
+func fireRestore() {
+	restoreMu.Lock()
+	armed, t := restoreArmed, restoreTo
+	restoreArmed = false
+	restoreMu.Unlock()
+	if armed && t != "" {
+		_ = engine.SetOutput(t)
+	}
+}
+
 // Run launches the interactive TUI. Default mode is Instant (low latency).
 func Run() error {
 	m := model{
@@ -122,7 +160,15 @@ func Run() error {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	sp.Style = m.styles.Key
 	m.spin = sp
+
+	// Closing the terminal sends SIGHUP, which skips the normal quit path — restore
+	// the audio output ourselves on the way out (only if Instant armed it).
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP)
+	go func() { <-sig; fireRestore(); os.Exit(0) }()
+
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
+	fireRestore() // safety net for Ctrl+C / normal quit
 	return err
 }
 
@@ -291,6 +337,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		}
 		m.instantPrev = engine.CurrentOutput()
 		_ = engine.SetOutput(engine.SyncDevice)
+		armRestore(m.instantPrev) // restore even if the terminal is closed (SIGHUP)
 		ctx, cancel := context.WithCancel(context.Background())
 		m.instantCancel = cancel
 		go func() { _ = instant.Run(ctx, instant.Port) }()
@@ -333,6 +380,7 @@ func (m *model) stopInstant() {
 	if target != "" {
 		_ = engine.SetOutput(target)
 	}
+	disarmRestore()
 	m.instantOn = false
 }
 
