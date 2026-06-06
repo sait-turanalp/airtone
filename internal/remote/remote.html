@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<title>AirTone — Remote</title>
+<style>
+  :root { color-scheme: dark; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 1.4rem;
+    background: #0f1117; color: #e6e6e6;
+    font-family: -apple-system, system-ui, sans-serif; text-align: center;
+  }
+  h1 { margin: 0; font-size: 1.6rem; }
+  .sub { color: #8b93a7; font-size: .9rem; margin-top: -.8rem; }
+  .np { max-width: 86vw; font-size: 1.05rem; min-height: 1.3em; padding: 0 1rem; }
+  .np .artist { color: #8b93a7; }
+  .controls { display: flex; align-items: center; gap: 1.6rem; }
+  .controls button {
+    appearance: none; border: 0; background: transparent; color: #e6e6e6;
+    font-size: 2rem; cursor: pointer; line-height: 1;
+  }
+  .controls button:active { transform: scale(.9); }
+  .controls .primary {
+    width: 4.2rem; height: 4.2rem; border-radius: 999px;
+    background: #5b6cff; color: #fff; font-size: 1.8rem;
+  }
+  .volrow { display: flex; align-items: center; gap: .8rem; width: 72vw; max-width: 320px; }
+  input[type=range] { flex: 1; accent-color: #5b6cff; height: 28px; }
+</style>
+</head>
+<body>
+  <h1>AirTone</h1>
+  <div class="sub">remote</div>
+  <div id="np" class="np">—</div>
+  <div class="controls">
+    <button data-cmd="prev" aria-label="previous">⏮</button>
+    <button data-cmd="toggle" class="primary" aria-label="play/pause">⏯</button>
+    <button data-cmd="next" aria-label="next">⏭</button>
+  </div>
+  <div class="volrow">🔈<input id="vol" type="range" min="0" max="100" value="50">🔊</div>
+
+<script>
+document.querySelectorAll('[data-cmd]').forEach(b =>
+  b.addEventListener('click', () => fetch('/control/' + b.dataset.cmd, { method: 'POST' })));
+
+const vol = document.getElementById('vol');
+let dragging = false;
+vol.addEventListener('input', () => { dragging = true; });
+vol.addEventListener('change', () => {
+  fetch('/control/volume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ volume: +vol.value }),
+  });
+  dragging = false;
+});
+
+async function poll() {
+  try {
+    const np = await (await fetch('/control/nowplaying')).json();
+    const el = document.getElementById('np');
+    if (np.title) {
+      el.innerHTML = np.title + (np.artist ? ' <span class="artist">— ' + np.artist + '</span>' : '');
+    } else {
+      el.textContent = 'Nothing playing';
+    }
+    if (!dragging) {
+      const v = await (await fetch('/control/volume')).json();
+      vol.value = v.volume;
+    }
+  } catch (e) { /* server gone — keep last view */ }
+}
+setInterval(poll, 1500);
+poll();
+</script>
+</body>
+</html>

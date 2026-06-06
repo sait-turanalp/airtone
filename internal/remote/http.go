@@ -15,6 +15,11 @@ import (
 // These drive the music source and are independent of the audio transport, so
 // the same handlers serve both modes.
 func Register(mux *http.ServeMux) {
+	mux.HandleFunc("/remote", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write(remotePage)
+	})
+
 	mux.HandleFunc("/control/nowplaying", func(w http.ResponseWriter, _ *http.Request) {
 		t, err := NowPlaying()
 		if err != nil {

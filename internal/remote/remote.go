@@ -36,6 +36,11 @@ var adapterTar []byte
 //go:embed volume.swift
 var volumeSrc []byte
 
+// remotePage is the standalone control-only page served at /remote.
+//
+//go:embed remote.html
+var remotePage []byte
+
 func dir() string           { return filepath.Join(engine.Home(), "remote", "mediaremote-adapter") }
 func plPath() string        { return filepath.Join(dir(), "mediaremote-adapter.pl") }
 func fwPath() string        { return filepath.Join(dir(), "MediaRemoteAdapter.framework") }

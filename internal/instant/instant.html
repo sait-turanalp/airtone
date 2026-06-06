@@ -22,6 +22,15 @@
   button:active { transform: scale(.98); }
   #status { color: #8b93a7; font-size: .95rem; min-height: 1.2em; }
   .live { color: #36d399 !important; font-weight: 600; }
+  .remote { margin-top: .4rem; display: flex; flex-direction: column; align-items: center; gap: 1rem; }
+  .np { max-width: 80vw; min-height: 1.2em; font-size: .95rem; }
+  .np .artist { color: #8b93a7; }
+  .controls { display: flex; align-items: center; gap: 1.4rem; }
+  .controls button { appearance: none; border: 0; background: transparent; color: #e6e6e6; font-size: 1.7rem; cursor: pointer; }
+  .controls button:active { transform: scale(.9); }
+  .controls .primary { width: 3.4rem; height: 3.4rem; border-radius: 999px; background: #5b6cff; color: #fff; font-size: 1.5rem; }
+  .volrow { display: flex; align-items: center; gap: .6rem; width: 70vw; max-width: 300px; }
+  .volrow input { flex: 1; accent-color: #5b6cff; }
 </style>
 </head>
 <body>
@@ -31,6 +40,16 @@
   <div id="status">tap to connect</div>
   <div id="stats" class="sub" style="margin-top:.3rem; font-variant-numeric: tabular-nums;"></div>
   <audio id="audio" autoplay playsinline></audio>
+
+  <div class="remote">
+    <div id="np" class="np">—</div>
+    <div class="controls">
+      <button data-cmd="prev" aria-label="previous">⏮</button>
+      <button data-cmd="toggle" class="primary" aria-label="play/pause">⏯</button>
+      <button data-cmd="next" aria-label="next">⏭</button>
+    </div>
+    <div class="volrow">🔈<input id="vol" type="range" min="0" max="100" value="50">🔊</div>
+  </div>
 
 <script>
 const btn = document.getElementById('play');
@@ -103,6 +122,30 @@ btn.addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+
+// --- remote control bar (drives the Mac's playback, independent of streaming) ---
+document.querySelectorAll('[data-cmd]').forEach(b =>
+  b.addEventListener('click', () => fetch('/control/' + b.dataset.cmd, { method: 'POST' })));
+const vol = document.getElementById('vol');
+let dragging = false;
+vol.addEventListener('input', () => { dragging = true; });
+vol.addEventListener('change', () => {
+  fetch('/control/volume', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ volume: +vol.value }),
+  });
+  dragging = false;
+});
+async function pollRemote() {
+  try {
+    const np = await (await fetch('/control/nowplaying')).json();
+    const el = document.getElementById('np');
+    el.innerHTML = np.title ? (np.title + (np.artist ? ' <span class="artist">— ' + np.artist + '</span>' : '')) : 'Nothing playing';
+    if (!dragging) { const v = await (await fetch('/control/volume')).json(); vol.value = v.volume; }
+  } catch (e) { /* ignore */ }
+}
+setInterval(pollRemote, 1500);
+pollRemote();
 </script>
 </body>
 </html>
