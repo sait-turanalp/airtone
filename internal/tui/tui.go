@@ -3,6 +3,9 @@
 //
 //   - Party   : multi-device synced playback via snapcast (buffered, ~1s).
 //   - Instant : low-latency single/loose playback via WebRTC (~tens of ms).
+//
+// The view is theme-driven (styles.go), responsive (sizes from WindowSizeMsg),
+// and keeps a single key map (keys.go) shared by the footer and dispatch.
 package tui
 
 import (
@@ -15,6 +18,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/charmbracelet/bubbles/help"
+	"github.com/charmbracelet/bubbles/key"
+	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/mdp/qrterminal/v3"
@@ -27,19 +33,19 @@ import (
 
 const partyPort = "1780"
 
+// Layout floors. Below these the UI can't render usefully, so we show a gate
+// instead of a broken/overflowing screen.
+const (
+	minWidth  = 50
+	minHeight = 16
+)
+
 type mode int
 
 const (
 	modeParty mode = iota
 	modeInstant
 )
-
-func (m mode) String() string {
-	if m == modeInstant {
-		return "Instant (low-latency)"
-	}
-	return "Party (synced)"
-}
 
 type screen int
 
@@ -67,7 +73,10 @@ type statusMsg struct {
 	st  *rpc.Status
 	err error
 }
-type doctorMsg []doctor.Check
+type doctorMsg struct {
+	checks   []doctor.Check
+	ffmpegOK bool
+}
 type startedMsg struct{ err error }
 type stoppedMsg struct{ err error }
 type setupDoneMsg struct{ err error }
@@ -75,11 +84,20 @@ type setupDoneMsg struct{ err error }
 // --- model ---
 
 type model struct {
-	screen   screen
-	mode     mode
-	width    int
+	width, height int
+
+	styles Styles
+	keys   keyMap
+	help   help.Model
+	spin   spinner.Model
+
+	screen screen
+	mode   mode
+
 	checks   []doctor.Check
-	ready    bool
+	ready    bool // all Party checks pass
+	syncOK   bool // AirTone Sync device present (needed by both modes)
+	ffmpegOK bool // ffmpeg present (needed by Instant)
 	status   *rpc.Status
 	bufferMS int
 
@@ -87,13 +105,23 @@ type model struct {
 	instantCancel context.CancelFunc
 	instantPrev   string
 
-	busy string
-	note string
+	busy string // async op label; spinner shows while set
+	note string // inline message; cleared on next interaction
 }
 
-// Run launches the interactive TUI.
+// Run launches the interactive TUI. Default mode is Instant (low latency).
 func Run() error {
-	m := model{bufferMS: currentBuffer()}
+	m := model{
+		mode:     modeInstant,
+		bufferMS: currentBuffer(),
+		styles:   newStyles(),
+		keys:     newKeyMap(),
+		help:     help.New(),
+	}
+	m.help.Width = 80
+	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
+	sp.Style = m.styles.Key
+	m.spin = sp
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	return err
 }
@@ -115,7 +143,11 @@ func tick() tea.Cmd {
 	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
-func checkDoctor() tea.Msg { return doctorMsg(doctor.Run()) }
+func checkDoctor() tea.Msg {
+	checks := doctor.Run()
+	_, err := exec.LookPath("ffmpeg")
+	return doctorMsg{checks: checks, ffmpegOK: err == nil}
+}
 
 func pollStatus() tea.Msg {
 	st, err := rpc.GetStatus(rpc.DefaultAddr)
@@ -148,16 +180,29 @@ func restartEngine() tea.Msg {
 func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
-		m.width = msg.Width
+		m.width, m.height = msg.Width, msg.Height
+		m.help.Width = msg.Width
 	case tea.KeyMsg:
-		if msg.String() == "q" || msg.String() == "ctrl+c" {
+		if key.Matches(msg, m.keys.Quit) {
 			m.stopInstant() // leave audio output as we found it
 			return m, tea.Quit
+		}
+		m.note = "" // clear stale message on any interaction
+		if key.Matches(msg, m.keys.Help) {
+			m.help.ShowAll = !m.help.ShowAll
+			return m, nil
 		}
 		if m.screen == screenSettings {
 			return m.updateSettings(msg)
 		}
 		return m.updateHome(msg)
+	case spinner.TickMsg:
+		if m.busy != "" {
+			var cmd tea.Cmd
+			m.spin, cmd = m.spin.Update(msg)
+			return m, cmd
+		}
+		return m, nil
 	case tickMsg:
 		return m, tea.Batch(pollStatus, tick())
 	case statusMsg:
@@ -167,8 +212,15 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = msg.st
 		}
 	case doctorMsg:
-		m.checks = msg
-		m.ready = doctor.OK(msg)
+		m.checks = msg.checks
+		m.ready = doctor.OK(msg.checks)
+		m.ffmpegOK = msg.ffmpegOK
+		m.syncOK = false
+		for _, c := range msg.checks {
+			if strings.Contains(c.Name, "AirTone Sync") {
+				m.syncOK = c.OK
+			}
+		}
 	case startedMsg:
 		m.busy = ""
 		if msg.err != nil {
@@ -191,10 +243,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m model) updateHome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "m":
+	k := m.keys
+	switch {
+	case key.Matches(msg, k.Mode):
 		if m.running() {
-			m.note = "stop first (x)"
+			m.note = "stop first (x) before switching mode"
 			break
 		}
 		if m.mode == modeParty {
@@ -202,23 +255,22 @@ func (m model) updateHome(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.mode = modeParty
 		}
-		m.note = ""
-	case "s":
+	case key.Matches(msg, k.Start):
 		return m.start()
-	case "x":
+	case key.Matches(msg, k.Stop):
 		return m.stop()
-	case "g":
+	case key.Matches(msg, k.Setup):
 		if m.mode == modeParty && !m.ready && m.busy == "" {
-			m.busy, m.note = "Running setup…", ""
-			return m, runSetup
+			m.busy = "Running setup…"
+			return m, tea.Batch(runSetup, m.spin.Tick)
 		}
-	case "c":
+	case key.Matches(msg, k.Settings):
 		if m.mode == modeParty {
 			m.screen = screenSettings
 		} else {
 			m.note = "latency presets apply to Party mode"
 		}
-	case "r":
+	case key.Matches(msg, k.Recheck):
 		return m, checkDoctor
 	}
 	return m, nil
@@ -229,12 +281,12 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.mode == modeInstant {
-		if !engine.DeviceExists(engine.SyncDevice) {
+		if !m.syncOK {
 			m.note = "run setup first (g)"
 			return m, nil
 		}
-		if _, err := exec.LookPath("ffmpeg"); err != nil {
-			m.note = "instant needs ffmpeg (brew install ffmpeg)"
+		if !m.ffmpegOK {
+			m.note = "instant needs ffmpeg — brew install ffmpeg"
 			return m, nil
 		}
 		m.instantPrev = engine.CurrentOutput()
@@ -242,15 +294,16 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		ctx, cancel := context.WithCancel(context.Background())
 		m.instantCancel = cancel
 		go func() { _ = instant.Run(ctx, instant.Port) }()
-		m.instantOn, m.note = true, ""
+		m.instantOn = true
 		return m, nil
 	}
 	// party
-	if m.ready {
-		m.busy, m.note = "Starting…", ""
-		return m, startEngine
+	if !m.ready {
+		m.note = "run setup first (g)"
+		return m, nil
 	}
-	return m, nil
+	m.busy = "Starting…"
+	return m, tea.Batch(startEngine, m.spin.Tick)
 }
 
 func (m model) stop() (tea.Model, tea.Cmd) {
@@ -259,8 +312,8 @@ func (m model) stop() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	if m.running() && m.busy == "" {
-		m.busy, m.note = "Stopping…", ""
-		return m, stopEngine
+		m.busy = "Stopping…"
+		return m, tea.Batch(stopEngine, m.spin.Tick)
 	}
 	return m, nil
 }
@@ -284,10 +337,11 @@ func (m *model) stopInstant() {
 }
 
 func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
-	case "esc", "c":
+	k := m.keys
+	switch {
+	case key.Matches(msg, k.Back), key.Matches(msg, k.Settings):
 		m.screen = screenHome
-	case "1", "2", "3", "4", "5":
+	case key.Matches(msg, k.Preset):
 		i := int(msg.String()[0] - '1')
 		if i < 0 || i >= len(presets) {
 			return m, nil
@@ -296,18 +350,44 @@ func (m model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		os.Setenv("AIRTONE_BUFFER", strconv.Itoa(m.bufferMS))
 		if m.mode == modeParty && m.running() {
 			m.busy = "Applying…"
-			return m, restartEngine
+			return m, tea.Batch(restartEngine, m.spin.Tick)
 		}
 	}
 	return m, nil
 }
 
-// running reports whether the currently-selected mode is active.
+// --- state helpers ---
+
 func (m model) running() bool {
 	if m.mode == modeInstant {
 		return m.instantOn
 	}
 	return m.status != nil && len(m.status.Streams) > 0
+}
+
+func (m model) streamPlaying() bool {
+	if m.status == nil {
+		return false
+	}
+	for _, s := range m.status.Streams {
+		if s.Status == "playing" {
+			return true
+		}
+	}
+	return false
+}
+
+func (m model) connectedClients() []rpc.Client {
+	if m.status == nil {
+		return nil
+	}
+	var out []rpc.Client
+	for _, c := range m.status.Clients {
+		if c.Connected {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func (m model) url() string {
@@ -318,145 +398,292 @@ func (m model) url() string {
 	return "http://" + engine.LANIP() + ":" + port
 }
 
+// layoutWidth is the usable width, leaving a small margin so centered panels
+// never touch the terminal edges.
+func (m model) layoutWidth() int {
+	if m.width <= 0 {
+		return 80
+	}
+	return m.width - 4
+}
+
 // --- view ---
 
 func (m model) View() string {
+	st := m.styles
+	if m.width > 0 && (m.width < minWidth || m.height < minHeight) {
+		return st.Gate.Render("AirTone\n\nTerminal too small.\nResize to at least 60×20.")
+	}
+
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("AirTone") + "  " + dimStyle.Render(m.mode.String()+"  ·  m to switch") + "\n\n")
-
-	if m.screen == screenSettings {
-		b.WriteString(m.renderSettings())
-		b.WriteString("\n\n" + dimStyle.Render(keyStyle.Render(fmt.Sprintf("1-%d", len(presets)))+" pick profile   "+keyStyle.Render("esc")+" back   "+keyStyle.Render("q")+" quit"))
-		return b.String()
-	}
-
-	switch {
-	case m.mode == modeInstant:
-		if m.instantOn {
-			b.WriteString(m.renderInstant())
-		} else {
-			b.WriteString(boxStyle.Render("Instant mode (low-latency). Press " + keyStyle.Render("s") + " to start."))
-		}
-	case !m.ready:
-		b.WriteString(m.renderDoctor())
-	case m.running():
-		b.WriteString(m.renderLive())
-	default:
-		b.WriteString(boxStyle.Render("Party mode (synced). Press " + keyStyle.Render("s") + " to start."))
-	}
-
+	b.WriteString(m.header())
+	b.WriteString("\n\n")
+	b.WriteString(m.body())
 	if m.busy != "" {
-		b.WriteString("\n" + dimStyle.Render(m.busy))
+		b.WriteString("\n\n" + m.spin.View() + " " + st.Dim.Render(m.busy))
 	}
 	if m.note != "" {
-		b.WriteString("\n" + badStyle.Render(m.note))
+		b.WriteString("\n\n" + st.ErrText.Render(m.note))
 	}
-	b.WriteString("\n\n" + m.footer())
-	return b.String()
+	b.WriteString("\n\n" + m.help.View(m.activeHelp()))
+	content := b.String()
+	// Center the whole UI in the terminal so it stays balanced at any size
+	// instead of clinging to the top-left corner.
+	if m.width > 0 && m.height > 0 {
+		return lipgloss.Place(m.width, m.height, lipgloss.Center, lipgloss.Center, content)
+	}
+	return st.App.Render(content)
 }
 
-func (m model) renderDoctor() string {
-	lines := []string{"Setup check:"}
-	for _, c := range m.checks {
-		if c.OK {
-			lines = append(lines, okStyle.Render("  ✓ ")+c.Name)
-		} else {
-			detail := ""
-			if c.Detail != "" {
-				detail = dimStyle.Render(" — " + c.Detail)
-			}
-			lines = append(lines, badStyle.Render("  ✗ ")+c.Name+detail)
-		}
+func (m model) header() string {
+	st := m.styles
+	parts := []string{
+		st.Title.Render("AirTone"),
+		st.ModeBadge.Render(m.modeLabel()),
+		m.stateBadge(),
 	}
-	return boxStyle.Render(strings.Join(lines, "\n"))
+	return parts[0] + "  " + parts[1] + st.Dim.Render(" · ") + parts[2]
+}
+
+func (m model) modeLabel() string {
+	if m.mode == modeInstant {
+		return "◈ Instant"
+	}
+	return "◈ Party"
+}
+
+func (m model) stateBadge() string {
+	st := m.styles
+	if !m.running() {
+		return st.Idle.Render("○ idle")
+	}
+	if m.mode == modeParty && !m.streamPlaying() {
+		return st.Idle.Render("◐ buffering")
+	}
+	return st.Live.Render("● LIVE")
+}
+
+func (m model) body() string {
+	switch {
+	case m.screen == screenSettings:
+		return m.renderSettings()
+	case m.mode == modeInstant:
+		if m.instantOn {
+			return m.renderInstantLive()
+		}
+		return m.renderInstantIdle()
+	case !m.ready:
+		return m.renderDoctor()
+	case m.running():
+		return m.renderLive()
+	default:
+		return m.renderPartyIdle()
+	}
+}
+
+// dashboard lays out a status panel beside the QR/URL card, collapsing
+// responsively: side-by-side → stacked → URL-only (QR dropped) as width shrinks.
+func (m model) dashboard(title string, lines []string) string {
+	st := m.styles
+	url := m.url()
+	qrCard := st.Panel.Render(strings.Join([]string{
+		st.PanelTitle.Render("Scan to join"),
+		"",
+		st.QR.Render(qrCode(url)),
+		"",
+		st.URL.Render(url),
+	}, "\n"))
+	qw := lipgloss.Width(qrCard)
+	avail := m.layoutWidth()
+
+	panel := st.Panel.Render(st.PanelTitle.Render(title) + "\n\n" + strings.Join(lines, "\n"))
+	pw := lipgloss.Width(panel)
+
+	const gap = "    "
+	switch {
+	case avail >= pw+qw+len(gap):
+		return lipgloss.JoinHorizontal(lipgloss.Center, panel, gap, qrCard)
+	case avail >= qw:
+		return lipgloss.JoinVertical(lipgloss.Left, panel, "", qrCard)
+	default:
+		// Too narrow for the QR: fold the URL into the status panel.
+		lines = append(lines, "", st.Dim.Render("Open on your phone:"), st.URL.Render(url))
+		return st.Panel.Render(st.PanelTitle.Render(title) + "\n\n" + strings.Join(lines, "\n"))
+	}
 }
 
 func (m model) renderLive() string {
-	streamState := idleStyle.Render("idle (play something on the Mac)")
-	for _, s := range m.status.Streams {
-		if s.Status == "playing" {
-			streamState = liveStyle.Render("● LIVE")
+	st := m.styles
+	state := st.Idle.Render("idle — play something on the Mac")
+	if m.streamPlaying() {
+		state = st.Live.Render("● LIVE")
+	}
+	lines := []string{
+		"Stream    " + state,
+		"Buffer    " + fmt.Sprintf("%d ms", m.bufferMS),
+	}
+	conn := m.connectedClients()
+	lines = append(lines, "", fmt.Sprintf("Listeners (%d)", len(conn)))
+	if len(conn) == 0 {
+		lines = append(lines, st.Dim.Render("  none yet — scan the QR"))
+	} else {
+		for _, c := range conn {
+			muted := ""
+			if c.Muted {
+				muted = st.Dim.Render(" muted")
+			}
+			lines = append(lines, fmt.Sprintf("  • %-12s %3d%%", c.Name, c.Percent)+muted)
 		}
 	}
-	var listeners []string
-	for _, c := range m.status.Clients {
-		if c.Connected {
-			listeners = append(listeners, fmt.Sprintf("  • %s (%d%%)", c.Name, c.Percent))
-		}
-	}
-	listenerBlock := dimStyle.Render("  no listeners yet — scan the QR")
-	if len(listeners) > 0 {
-		listenerBlock = strings.Join(listeners, "\n")
-	}
-	info := strings.Join([]string{
-		"Stream:    " + streamState,
-		"Listeners:",
-		listenerBlock,
-		"",
-		"Buffer:    " + fmt.Sprintf("%dms", m.bufferMS),
-		"",
-		"Open on your phone:",
-		keyStyle.Render("  " + m.url()),
-	}, "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url()))
+	return m.dashboard("Session", lines)
 }
 
-func (m model) renderInstant() string {
-	info := strings.Join([]string{
-		"Status:    " + liveStyle.Render("● running"),
-		fmt.Sprintf("Listeners: %d", instant.Listeners()),
+func (m model) renderInstantLive() string {
+	st := m.styles
+	lines := []string{
+		"Status     " + st.Live.Render("● running"),
+		fmt.Sprintf("Listeners  %d", instant.Listeners()),
 		"",
-		dimStyle.Render("low latency · no cross-device sync"),
-		"",
-		"Open on your phone:",
-		keyStyle.Render("  " + m.url()),
-	}, "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, boxStyle.Render(info), "  ", qrCode(m.url()))
+		st.Dim.Render("low latency · no cross-device sync"),
+	}
+	return m.dashboard("Session", lines)
+}
+
+func (m model) renderInstantIdle() string {
+	st := m.styles
+	if m.syncOK && m.ffmpegOK {
+		return st.Panel.Render(st.PanelTitle.Render("Instant mode") + "\n\n" +
+			st.Dim.Render("Low latency · single/loose listener.") + "\n\n" +
+			"Press " + st.Key.Render("s") + " to start.")
+	}
+	lines := []string{st.PanelTitle.Render("Instant mode — setup needed"), ""}
+	lines = append(lines, m.checkLine("AirTone Sync device", m.syncOK, "run setup (g)"))
+	lines = append(lines, m.checkLine("ffmpeg", m.ffmpegOK, "brew install ffmpeg"))
+	return st.Panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m model) renderDoctor() string {
+	st := m.styles
+	lines := []string{st.PanelTitle.Render("Setup check (Party mode)"), ""}
+	for _, c := range m.checks {
+		if c.OK {
+			lines = append(lines, st.CheckOK.Render("  ✓ ")+c.Name)
+		} else {
+			detail := ""
+			if c.Detail != "" {
+				detail = st.Dim.Render(" — " + c.Detail)
+			}
+			lines = append(lines, st.CheckFail.Render("  ✗ ")+c.Name+detail)
+		}
+	}
+	lines = append(lines, "", st.Dim.Render("Press ")+st.Key.Render("g")+st.Dim.Render(" to set up, ")+st.Key.Render("r")+st.Dim.Render(" to recheck."))
+	return st.Panel.Render(strings.Join(lines, "\n"))
+}
+
+func (m model) renderPartyIdle() string {
+	st := m.styles
+	return st.Panel.Render(st.PanelTitle.Render("Party mode") + "\n\n" +
+		st.Dim.Render(fmt.Sprintf("Multi-device synced playback (~%dms).", m.bufferMS)) + "\n\n" +
+		"Press " + st.Key.Render("s") + " to start.")
 }
 
 func (m model) renderSettings() string {
-	lines := []string{"Latency profile (Party buffer):", ""}
+	st := m.styles
+	lines := []string{st.PanelTitle.Render("Latency profile (Party buffer)"), ""}
 	for i, p := range presets {
 		marker, label := "  ", p.label
 		if p.ms == m.bufferMS {
-			marker, label = okStyle.Render("▸ "), okStyle.Render(p.label)
+			marker, label = st.CheckOK.Render("▸ "), st.Live.Render(p.label)
 		}
-		lines = append(lines, fmt.Sprintf("%s%s %-13s %s", marker, keyStyle.Render(strconv.Itoa(i+1)), label, dimStyle.Render(fmt.Sprintf("%dms — %s", p.ms, p.hint))))
+		lines = append(lines, fmt.Sprintf("%s%s  %-12s %s", marker, st.Key.Render(strconv.Itoa(i+1)), label, st.Dim.Render(fmt.Sprintf("%dms — %s", p.ms, p.hint))))
 	}
-	lines = append(lines, "", dimStyle.Render("Applies live while streaming (brief reconnect)."))
-	return boxStyle.Render(strings.Join(lines, "\n"))
+	lines = append(lines, "", st.Dim.Render("Applies live while streaming (brief reconnect)."))
+	return st.Panel.Render(strings.Join(lines, "\n"))
 }
 
-func (m model) footer() string {
-	var keys []string
+func (m model) checkLine(name string, ok bool, fix string) string {
+	st := m.styles
+	if ok {
+		return st.CheckOK.Render("  ✓ ") + name
+	}
+	return st.CheckFail.Render("  ✗ ") + name + st.Dim.Render(" — "+fix)
+}
+
+// activeHelp returns the context-sensitive footer: only the keys that do
+// something in the current mode/screen/state.
+func (m model) activeHelp() helpMap {
+	k := m.keys
+	if m.screen == screenSettings {
+		return helpMap{
+			short: []key.Binding{k.Preset, k.Back, k.Quit},
+			full:  [][]key.Binding{{k.Preset}, {k.Back, k.Quit}},
+		}
+	}
+	var primary key.Binding
 	switch {
 	case m.mode == modeParty && !m.ready:
-		keys = append(keys, keyStyle.Render("g")+" run setup")
+		primary = k.Setup
 	case !m.running():
-		keys = append(keys, keyStyle.Render("s")+" start")
+		primary = k.Start
 	default:
-		keys = append(keys, keyStyle.Render("x")+" stop")
+		primary = k.Stop
 	}
-	keys = append(keys, keyStyle.Render("m")+" mode")
+	short := []key.Binding{primary, k.Mode}
 	if m.mode == modeParty {
-		keys = append(keys, keyStyle.Render("c")+" settings")
+		short = append(short, k.Settings)
 	}
-	keys = append(keys, keyStyle.Render("r")+" recheck", keyStyle.Render("q")+" quit")
-	hint := ""
-	if m.mode == modeParty && m.running() {
-		hint = dimStyle.Render("   (quitting keeps streaming)")
+	short = append(short, k.Help, k.Quit)
+	full := [][]key.Binding{
+		{k.Start, k.Stop, k.Mode},
+		{k.Settings, k.Setup, k.Recheck},
+		{k.Help, k.Quit},
 	}
-	return dimStyle.Render(strings.Join(keys, "   ")) + hint
+	return helpMap{short: short, full: full}
 }
 
+// qrCode renders a compact half-block QR (two modules per character row, so
+// roughly half the height of full blocks). The caller wraps it in styles.QR to
+// force dark-on-white regardless of the terminal theme — best for phone cameras.
 func qrCode(s string) string {
 	var b bytes.Buffer
 	qrterminal.GenerateWithConfig(s, qrterminal.Config{
-		Level:     qrterminal.L,
-		Writer:    &b,
-		BlackChar: qrterminal.BLACK,
-		WhiteChar: qrterminal.WHITE,
-		QuietZone: 1,
+		Level:          qrterminal.L,
+		Writer:         &b,
+		HalfBlocks:     true,
+		BlackChar:      qrterminal.BLACK_BLACK,
+		WhiteBlackChar: qrterminal.WHITE_BLACK,
+		WhiteChar:      qrterminal.WHITE_WHITE,
+		BlackWhiteChar: qrterminal.BLACK_WHITE,
+		QuietZone:      2,
 	})
-	return b.String()
+	return evenQRBorders(strings.TrimRight(b.String(), "\n"))
+}
+
+// evenQRBorders fills the half-block quiet-zone row (which renders ragged —
+// a stray dark strip — because the QR has an odd module height) with solid
+// white. These are quiet-zone rows only (no data), so squaring them is safe
+// and gives a clean, symmetric white frame top and bottom.
+func evenQRBorders(s string) string {
+	lines := strings.Split(s, "\n")
+	solid := func(line string) string {
+		half := false
+		for _, r := range line {
+			switch r {
+			case '▀', '▄':
+				half = true
+			case '█':
+			default:
+				return line // contains data modules — not a pure border row
+			}
+		}
+		if half {
+			return strings.Repeat("█", len([]rune(line)))
+		}
+		return line
+	}
+	if len(lines) > 0 {
+		lines[0] = solid(lines[0])
+		lines[len(lines)-1] = solid(lines[len(lines)-1])
+	}
+	return strings.Join(lines, "\n")
 }
