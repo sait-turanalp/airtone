@@ -9,6 +9,8 @@ import (
 	"os/signal"
 	"syscall"
 
+	"golang.org/x/term"
+
 	"github.com/sait-turanalp/airtone/internal/doctor"
 	"github.com/sait-turanalp/airtone/internal/engine"
 	"github.com/sait-turanalp/airtone/internal/instant"
@@ -156,14 +158,42 @@ func runInstant() {
 		}
 	}
 
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// Catch SIGHUP (terminal close) too, so the output is restored on every exit
+	// path — not just Ctrl+C — and the user's default device is left clean.
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	fmt.Println("AirTone instant mode (WebRTC, low latency)")
 	fmt.Printf("  open on your phone: http://%s:%d\n", engine.LANIP(), instant.Port)
-	fmt.Println("  play audio on the Mac · Ctrl+C to stop")
+	fmt.Println("  play audio on the Mac · press q or Ctrl+C to stop")
+	fmt.Println("  tip: control volume from the app — macOS volume keys don't affect a Multi-Output device")
+
+	// Single-key 'q' to quit (raw mode). In raw mode Ctrl+C arrives as a byte, so
+	// handle 0x03/0x04 here too. Restored to cooked mode before we print/return.
+	var restoreTerm func()
+	if term.IsTerminal(int(os.Stdin.Fd())) {
+		if old, err := term.MakeRaw(int(os.Stdin.Fd())); err == nil {
+			restoreTerm = func() { _ = term.Restore(int(os.Stdin.Fd()), old) }
+			go func() {
+				b := make([]byte, 1)
+				for {
+					n, rerr := os.Stdin.Read(b)
+					if rerr != nil {
+						return
+					}
+					if n > 0 && (b[0] == 'q' || b[0] == 'Q' || b[0] == 3 || b[0] == 4) {
+						stop()
+						return
+					}
+				}
+			}()
+		}
+	}
 
 	err := instant.Run(ctx, instant.Port)
+	if restoreTerm != nil {
+		restoreTerm() // back to cooked mode before restoring audio / printing
+	}
 	restore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
