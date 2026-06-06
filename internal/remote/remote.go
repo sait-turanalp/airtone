@@ -9,8 +9,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	_ "embed"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -36,10 +39,19 @@ var adapterTar []byte
 //go:embed volume.swift
 var volumeSrc []byte
 
-// remotePage is the standalone control-only page served at /remote.
+// remotePage is the control page — served as the default Instant-mode page.
 //
 //go:embed remote.html
 var remotePage []byte
+
+// Page returns the control page HTML (the default page in Instant mode).
+func Page() []byte { return remotePage }
+
+// colorThiefJS is vendored (MIT) and served locally so adaptive background-color
+// extraction from the album art works offline, with no CDN dependency.
+//
+//go:embed colorthief.umd.js
+var colorThiefJS []byte
 
 func dir() string           { return filepath.Join(engine.Home(), "remote", "mediaremote-adapter") }
 func plPath() string        { return filepath.Join(dir(), "mediaremote-adapter.pl") }
@@ -66,7 +78,9 @@ func setup() error {
 	return buildVolume()
 }
 
-// buildVolume writes and compiles the CoreAudio volume helper (once).
+// buildVolume writes and compiles the CoreAudio volume helper. It recompiles
+// when the embedded source changes (tracked by a hash marker) so a newer helper
+// — e.g. one that gained "serve" mode — is never masked by a stale binary.
 func buildVolume() error {
 	if err := os.MkdirAll(filepath.Dir(volumeSrcPath()), 0o755); err != nil {
 		return err
@@ -74,10 +88,17 @@ func buildVolume() error {
 	if err := os.WriteFile(volumeSrcPath(), volumeSrc, 0o644); err != nil {
 		return err
 	}
+	sum := fmt.Sprintf("%x", sha256.Sum256(volumeSrc))
+	marker := volumeBinPath() + ".sha"
 	if _, err := os.Stat(volumeBinPath()); err == nil {
-		return nil // already compiled
+		if old, _ := os.ReadFile(marker); string(old) == sum {
+			return nil // up to date
+		}
 	}
-	return exec.Command("swiftc", volumeSrcPath(), "-o", volumeBinPath()).Run()
+	if err := exec.Command("swiftc", volumeSrcPath(), "-o", volumeBinPath()).Run(); err != nil {
+		return err
+	}
+	return os.WriteFile(marker, []byte(sum), 0o644)
 }
 
 func extractAdapter() error {
@@ -176,6 +197,20 @@ func Send(cmd string) error {
 	return err
 }
 
+// Seek jumps to a position (seconds) in the current track. The adapter expects
+// a positive integer in microseconds.
+func Seek(seconds float64) error {
+	if err := ensure(); err != nil {
+		return err
+	}
+	if seconds < 0 {
+		seconds = 0
+	}
+	us := int64(seconds * 1_000_000)
+	_, err := adapter("seek", strconv.FormatInt(us, 10))
+	return err
+}
+
 // Volume returns the built-in output volume (0-100).
 func Volume() (int, error) {
 	if err := ensure(); err != nil {
@@ -186,6 +221,42 @@ func Volume() (int, error) {
 		return 0, err
 	}
 	return strconv.Atoi(strings.TrimSpace(string(out)))
+}
+
+// A persistent "volume serve" helper applies values fed over stdin. Spawning a
+// process per change cost ~250ms and killed the live-drag feel; a pipe write is
+// effectively instant. volMu serializes access and keeps writes ordered.
+var (
+	volMu    sync.Mutex
+	volStdin io.WriteCloser
+	volProc  *exec.Cmd
+)
+
+func startVolumeDaemon() error {
+	cmd := exec.Command(volumeBinPath(), "serve")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	volProc, volStdin = cmd, stdin
+	return nil
+}
+
+func stopVolumeDaemon() {
+	if volStdin != nil {
+		_ = volStdin.Close()
+		volStdin = nil
+	}
+	if volProc != nil {
+		if volProc.Process != nil {
+			_ = volProc.Process.Kill()
+		}
+		_ = volProc.Wait()
+		volProc = nil
+	}
 }
 
 // SetVolume sets the built-in output volume (clamped 0-100).
@@ -199,7 +270,50 @@ func SetVolume(v int) error {
 	if v > 100 {
 		v = 100
 	}
-	return exec.Command(volumeBinPath(), "set", strconv.Itoa(v)).Run()
+	volMu.Lock()
+	defer volMu.Unlock()
+	if volStdin == nil {
+		if err := startVolumeDaemon(); err != nil {
+			return err
+		}
+	}
+	if _, err := io.WriteString(volStdin, strconv.Itoa(v)+"\n"); err != nil {
+		stopVolumeDaemon() // pipe broke (helper died) — restart once and retry
+		if err := startVolumeDaemon(); err != nil {
+			return err
+		}
+		_, err = io.WriteString(volStdin, strconv.Itoa(v)+"\n")
+		return err
+	}
+	return nil
+}
+
+// Artwork returns the current track's cover image bytes and MIME type
+// (nil bytes if nothing is playing or there's no artwork).
+func Artwork() ([]byte, string, error) {
+	if err := ensure(); err != nil {
+		return nil, "", err
+	}
+	out, err := adapter("get")
+	if err != nil {
+		return nil, "", err
+	}
+	var d struct {
+		Data string `json:"artworkData"`
+		Mime string `json:"artworkMimeType"`
+	}
+	if json.Unmarshal(bytes.TrimSpace(out), &d) != nil || d.Data == "" {
+		return nil, "", nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(d.Data)
+	if err != nil {
+		return nil, "", err
+	}
+	mime := d.Mime
+	if mime == "" {
+		mime = "image/jpeg"
+	}
+	return raw, mime, nil
 }
 
 func adapter(args ...string) ([]byte, error) {

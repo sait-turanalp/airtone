@@ -3,8 +3,10 @@
 // "AirTone Sync" aggregate, which has no master volume (osascript returns
 // "missing value"). The built-in speakers are the audible leg of that aggregate.
 //
-// Usage:  volume get        -> prints 0-100
-//         volume set <0-100> -> sets it
+// Usage:  volume get          -> prints 0-100
+//         volume set <0-100>   -> sets it once
+//         volume serve         -> long-lived: read 0-100 per stdin line, set each
+//                                 instantly (no per-change process spawn)
 import CoreAudio
 import Foundation
 
@@ -90,6 +92,15 @@ case "set":
     guard args.count >= 3, let pct = Int(args[2]) else { exit(1) }
     let clamped = max(0, min(100, pct))
     exit(setVolume(dev, Float32(clamped) / 100.0) ? 0 : 1)
+case "serve":
+    // Long-lived: apply one 0-100 value per stdin line instantly, so a live
+    // slider drag never pays the per-change process-launch cost. Exits on EOF
+    // (parent closed the pipe / quit).
+    while let line = readLine(strippingNewline: true) {
+        if let pct = Int(line.trimmingCharacters(in: .whitespaces)) {
+            _ = setVolume(dev, Float32(max(0, min(100, pct))) / 100.0)
+        }
+    }
 default:
     exit(1)
 }

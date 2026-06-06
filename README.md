@@ -53,11 +53,14 @@ See [docs/architecture.md](docs/architecture.md) for the full design and the rea
 
 ## Remote control
 
-The Instant page and a standalone **`/remote`** page include a control bar to
-drive the Mac's music from your phone — independent of streaming:
+The Instant-mode page is a full-screen "now playing" remote that drives the Mac's
+music from your phone — independent of streaming:
 
-- **Now playing** (title / artist), updated live
-- **⏮ ⏯ ⏭** transport and a **volume** slider
+- **Album art** (high-res, looked up via the iTunes catalogue) with a live,
+  artwork-derived **ambient background** and a frosted-glass player card
+- **Now playing** (title / artist), pushed live over SSE
+- **⏮ ⏯ ⏭** transport, a **scrubber**, and a **volume** slider — both sliders
+  are drag-to-scrub with instant, live response
 
 It works with any media app (Spotify, Apple Music, a browser tab) via Apple's
 MediaRemote — no app, no permission, and the helper is bundled so it works

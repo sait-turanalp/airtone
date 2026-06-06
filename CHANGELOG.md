@@ -6,7 +6,9 @@ Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 ## [0.3.0]
 
 ### Added
-- **Remote control**: drive the Mac's music from the phone — now-playing, play/pause/next/prev, and a volume slider — on the Instant page and a standalone `/remote` page.
+- **Remote control**: the Instant-mode page is now a full-screen "now playing" remote — drive the Mac's music from the phone with transport (play/pause/next/prev), a scrubber, and a volume slider.
+- **A-tier player UI**: high-res album art (iTunes lookup, with a graceful placeholder when none exists), an artwork-derived ambient background, a frosted-glass card, crossfading covers, and elastic drag-to-scrub sliders with instant, live response.
+- Live now-playing over Server-Sent Events (no polling); volume applied instantly via a persistent CoreAudio helper.
 - Bundled, permission-free playback control via Apple's MediaRemote (embedded mediaremote-adapter, BSD-3); works offline and with any media app.
 - CoreAudio volume helper that controls the built-in output directly (works while the "AirTone Sync" aggregate is the default device).
 

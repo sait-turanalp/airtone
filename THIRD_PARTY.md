@@ -9,6 +9,18 @@ AirTone is MIT-licensed. It bundles and depends on the following.
   Embedded as `internal/remote/mediaremote-adapter.tgz` and used to read and
   control the macOS "Now Playing" source. Its full license is included inside
   that archive.
+- **color-thief** — MIT, © Lokesh Dhakar.
+  <https://github.com/lokesh/color-thief>
+  Embedded as `internal/remote/colorthief.umd.js`; extracts the album art's
+  dominant colours for the player's ambient background (served locally, offline).
+
+## Credits (technique / API, no code bundled)
+
+- **frigopedro/Apple-Music-Background** — the dominant-colour-grid ambient
+  background technique was reimplemented (in vanilla JS/CSS) from this project.
+  <https://github.com/frigopedro/Apple-Music-Background>
+- **iTunes Search API** — queried at runtime to fetch high-resolution album art
+  by title/artist. Public, no key; falls back to the local thumbnail offline.
 
 ## Runtime dependencies (installed via Homebrew, not linked into the binary)
 

@@ -48,6 +48,7 @@ func Events(w http.ResponseWriter, r *http.Request) {
 
 	// Merge diff/full payloads into running state, emit only the slim subset.
 	state := map[string]any{}
+	lastTitle := ""
 	br := bufio.NewReader(stdout)
 	for {
 		line, rerr := br.ReadBytes('\n')
@@ -58,6 +59,13 @@ func Events(w http.ResponseWriter, r *http.Request) {
 			if json.Unmarshal(line, &msg) == nil && msg.Payload != nil {
 				for k, v := range msg.Payload {
 					state[k] = v
+				}
+				// Warm the artwork cache as soon as the track changes.
+				if title, _ := state["title"].(string); title != "" && title != lastTitle {
+					lastTitle = title
+					artist, _ := state["artist"].(string)
+					bundle, _ := state["bundleIdentifier"].(string)
+					go PrefetchArtwork(title, artist, bundle)
 				}
 				slim, _ := json.Marshal(map[string]any{
 					"title":       state["title"],

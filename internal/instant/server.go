@@ -26,15 +26,10 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 
 	"github.com/sait-turanalp/airtone/internal/remote"
-
-	_ "embed"
 )
 
 // Port is the HTTP port for the Instant-mode page and signaling.
 const Port = 1781
-
-//go:embed instant.html
-var pageHTML []byte
 
 // listeners counts currently-connected browsers (for the TUI).
 var listeners atomic.Int64
@@ -69,9 +64,13 @@ func Run(ctx context.Context, port int) error {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/" { // the control page is the single page; nothing else is served
+			http.NotFound(w, r)
+			return
+		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = w.Write(pageHTML)
+		_, _ = w.Write(remote.Page())
 	})
 	mux.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {
 		handleOffer(w, r, track)
