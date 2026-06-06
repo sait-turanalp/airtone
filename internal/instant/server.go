@@ -25,6 +25,8 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 
+	"github.com/sait-turanalp/airtone/internal/remote"
+
 	_ "embed"
 )
 
@@ -52,6 +54,8 @@ const capturePipeline = `sox -q -t coreaudio "BlackHole 2ch" -t raw -b 16 -e sig
 
 // Run starts the capture pipeline and the HTTP/WebRTC server until ctx is done.
 func Run(ctx context.Context, port int) error {
+	go func() { _ = remote.Warmup() }() // compile/extract control helpers before the phone connects
+
 	track, err := webrtc.NewTrackLocalStaticSample(
 		webrtc.RTPCodecCapability{MimeType: webrtc.MimeTypeOpus},
 		"audio", "airtone",
@@ -72,6 +76,7 @@ func Run(ctx context.Context, port int) error {
 	mux.HandleFunc("/offer", func(w http.ResponseWriter, r *http.Request) {
 		handleOffer(w, r, track)
 	})
+	remote.Register(mux) // /control/* — drive the Mac's playback from the phone
 
 	srv := &http.Server{Addr: portAddr(port), Handler: mux}
 	go func() {
