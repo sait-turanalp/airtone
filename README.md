@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="ss.png" alt="AirTone — the phone web remote, an iOS-26 liquid-glass player" width="460">
+  <img src="ss.png" alt="AirTone — the phone web remote, an iOS-26 liquid-glass player" width="620">
 </p>
 
 AirTone is a local audio **engine** for macOS. It unifies a virtual sound driver, a gapless capture stage, and a sample-accurate sync server into a single tool — so whatever plays on your Mac also plays on your phone, perfectly in sync. The phone just opens a web page (scan a QR code) — **nothing to install** — and doubles as a polished remote for your Mac's playback.
