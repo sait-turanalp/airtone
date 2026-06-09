@@ -112,37 +112,35 @@ type model struct {
 	note string // inline message; cleared on next interaction
 }
 
-// Terminal close (SIGHUP) bypasses Bubble Tea's quit handling, so Instant arms a
-// best-effort output restore that fires on the way out. Party never arms it — it
-// is meant to keep streaming after the UI closes.
+// AirTone switches the system output to its Multi-Output device while running.
+// On *any* exit — q, Ctrl+C, or a closed terminal (SIGHUP) — we put the output
+// back. fireRestore is unconditional and idempotent: if we're still on AirTone's
+// device, return to the remembered previous one (or the built-in speakers).
 var (
-	restoreMu    sync.Mutex
-	restoreArmed bool
-	restoreTo    string
+	restoreMu sync.Mutex
+	restoreTo string
 )
 
-func armRestore(prev string) {
-	t := prev
-	if t == "" || t == engine.SyncDevice {
-		t = engine.BuiltinOutput()
+func rememberPrev(prev string) {
+	if prev == "" || prev == engine.SyncDevice {
+		return
 	}
 	restoreMu.Lock()
-	restoreTo, restoreArmed = t, true
-	restoreMu.Unlock()
-}
-
-func disarmRestore() {
-	restoreMu.Lock()
-	restoreArmed = false
+	restoreTo = prev
 	restoreMu.Unlock()
 }
 
 func fireRestore() {
+	if engine.CurrentOutput() != engine.SyncDevice {
+		return
+	}
 	restoreMu.Lock()
-	armed, t := restoreArmed, restoreTo
-	restoreArmed = false
+	t := restoreTo
 	restoreMu.Unlock()
-	if armed && t != "" {
+	if t == "" {
+		t = engine.BuiltinOutput()
+	}
+	if t != "" {
 		_ = engine.SetOutput(t)
 	}
 }
@@ -230,7 +228,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.help.Width = msg.Width
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.Quit) {
-			m.stopInstant() // leave audio output as we found it
+			m.stopInstant()
+			if m.mode == modeParty {
+				var b bytes.Buffer
+				_ = engine.Stop(&b) // stop snapserver + restore the output
+			}
+			fireRestore() // return to the previous device on every quit
 			return m, tea.Quit
 		}
 		m.note = "" // clear stale message on any interaction
@@ -337,7 +340,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		}
 		m.instantPrev = engine.CurrentOutput()
 		_ = engine.SetOutput(engine.SyncDevice)
-		armRestore(m.instantPrev) // restore even if the terminal is closed (SIGHUP)
+		rememberPrev(m.instantPrev) // restore on any exit, incl. a closed terminal
 		ctx, cancel := context.WithCancel(context.Background())
 		m.instantCancel = cancel
 		go func() { _ = instant.Run(ctx, instant.Port) }()
@@ -349,6 +352,7 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		m.note = "run setup first (g)"
 		return m, nil
 	}
+	rememberPrev(engine.CurrentOutput()) // so quit / close returns to this device
 	m.busy = "Starting…"
 	return m, tea.Batch(startEngine, m.spin.Tick)
 }
@@ -380,7 +384,6 @@ func (m *model) stopInstant() {
 	if target != "" {
 		_ = engine.SetOutput(target)
 	}
-	disarmRestore()
 	m.instantOn = false
 }
 
