@@ -93,6 +93,12 @@ Read it for the shape; this spine is the legend. Troubleshooting: `docs/troubles
 - **snapclient registers with CoreAudio only once it is playing** — and it only plays once the
   stream carries data, which needs the tap. The tap breaks that deadlock by streaming silence
   until the process it must exclude appears; never "just skip the exclusion" (feedback loop).
+- **Never tap a process that is on a call.** Muting an app and replaying its audio 500 ms later
+  from snapclient destroys the app's echo cancellation — its reference no longer matches what the
+  mic hears, so the person on the other end hears themselves. The tap excludes every process with
+  a live input stream (`kAudioProcessPropertyIsRunningInput`) and rebuilds itself when that set
+  changes. Match on the microphone, never on an app-name list: it covers a browser tab and a
+  native app identically. Confirmed in a live Gather call, 2026-08-27.
 - **macOS snapclient has no output-device flag** — it always plays to the system default. Fine
   here (we never switch it), but it rules out any design needing snapclient on a chosen device.
 - **Don't run `goreleaser release` locally** — release is CI-only on a `v*` tag; a local run

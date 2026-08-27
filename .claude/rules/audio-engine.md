@@ -26,6 +26,14 @@ paths:
   needs the tap that needs snapclient's process ID. `systemtap.swift` breaks this by streaming
   real-time silence until the excluded process appears, then swapping in the real capture. Don't
   "simplify" that away; measured, snapclient never registers on an idle stream.
+- **A process on a call must never be tapped.** Party mode mutes at the source and replays the
+  audio half a second later through snapclient; a meeting app's echo canceller subtracts what it
+  is *about to play* from the mic signal, so once the real sound comes from another process 500 ms
+  late, cancellation fails and the remote party hears themselves. `callProcesses()` in
+  `systemtap.swift` excludes everything with `kAudioProcessPropertyIsRunningInput`, and a monitor
+  thread rebuilds the tap when that set changes (a tap's exclusion list is fixed at creation).
+  Never replace this with an app-name list: the microphone is the actual signal and it covers a
+  browser tab exactly like a native app. Verified live in a Gather call.
 - **macOS snapclient has no output-device flag** (`--help` on 0.35: no `-s`/`--soundcard`; the man
   page is a stale Linux copy). It always plays to the system default. Harmless here — we never
   switch the default — but it kills any design needing snapclient on a specific device.

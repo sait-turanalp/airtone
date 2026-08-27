@@ -22,6 +22,7 @@ Boru hattı şu an CANLI (`airtone party`) — kullanıcı telefonla test edebil
 - [x] 4 · Instant modu + dokümanlar    gate: ✅ repo'da BlackHole yalnız tarihçe olarak geçiyor
 
 ## done
+- 08-27: **Yankı hatası bulundu ve kapatıldı — canlı toplantıda doğrulandı.** Party modu toplantı uygulamalarının yankı engellemesini bozuyordu (kaynağında mute + 500 ms gecikmeli geri çalma = engelleyicinin referansı tutmuyor, karşı taraf kendini duyuyor). Çözüm: mikrofonu açık olan her süreç tap'ten dışlanıyor (`kAudioProcessPropertyIsRunningInput`), ve bu küme değişince tap yeniden kuruluyor. Uygulama adı listesi YOK — mikrofon sinyali tarayıcı sekmesini de native uygulamayı da aynı kapsıyor. Canlı Gather çağrısında `com.gather.GatherV2.helper` yakalandı; kullanıcı onayladı: yankı yok.
 - 08-27: **Kararlılık ölçüldü — akış temiz.** Temiz taban 3 dk boşta: 2 resync (ikisi de açılışın ilk 300 ms'i, sessizlik-pompası→gerçek-tap devri), sonrası SIFIR. Parça değişimi (dur/boşluk/başka ses): 0 resync. Örnekleme hızı geçişleri 44.1k→48k→96k→44.1k: 0 resync (macOS cihaz hızına yeniden örnekliyor, tap 48000'de sabit). Saat sapması: 192000 bayt/sn = 48000.0 Hz, **+0.000%**.
 - 08-27: Yanlış alarm dersi — ilk bakılan logda 25 resync vardı, sebebi kendi test taplarımdı (art arda aggregate cihaz yaratıp yok etmek çalışan tap'i rahatsız ediyor). Ölçüm sırasında paralel tap açma; taban her zaman dokunulmamış boru hattında alınır.
 - 08-27: Faz 2-4 kapandı (kulak testi hariç). Motor tap'e geçti, Mac snapclient oldu, `sox`+`switchaudio-osx`+BlackHole bağımlılıkları ve cihaz geri-yükleme makinesi silindi. Kapılar: go vet/build/test + shellcheck yeşil; `airtone doctor` 6/6.
@@ -40,7 +41,7 @@ Boru hattı şu an CANLI (`airtone party`) — kullanıcı telefonla test edebil
 - Buffer 1000 → 500 ms — BlackHole roundtrip'i kalktığı için jitter düştü; Mac de artık buffer'dan çaldığından algılanan gecikmeyi yarıya indirmek istiyoruz. `AIRTONE_BUFFER` ile ayarlanabilir kalır.
 
 ## open / blockers
-- open: kulak testi — Mac + iPhone gerçekten aynı anda mı? Tek kalan kapı; ölçüm zinciri kapattı ama sapmayı kulak yargılar.
+- open: kulak testi — Mac + iPhone gerçekten aynı anda mı?  (toplantı/yankı tarafı kapandı, kalan tek şey bu) Tek kalan kapı; ölçüm zinciri kapattı ama sapmayı kulak yargılar.
 - open: `CATapMutedWhenTapped` seçildi (çökmede ses kendiliğinden geri gelsin diye); `CATapMuted` ile farkı kulakla ayırt edilmedi — pratikte fark görülmedi.
 - open: snapclient çökerse audio object ID değişir, dışlama kopar → geri-besleme. Şimdilik `ponytail:` şerhiyle bırakılıyor (gözlenmeden çözülmeyecek); gözlenirse tap'i yeniden yaratan bir watcher gerekir.
 - open: iPhone Safari'de gerçek sapma bandı ölçülmedi — hedef ~50 ms, kulak testi faz 2 kapısı.
