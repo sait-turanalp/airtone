@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/wordmark-dark.svg">
-    <img alt="AirTone — Mac audio on every phone, in sync" src="docs/brand/wordmark-light.svg" width="440">
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/airtone-wordmark-dark.svg">
+    <img alt="AirTone — Mac audio on every phone, in sync" src="docs/brand/airtone-wordmark-light.svg" width="440">
   </picture>
 </p>
 
