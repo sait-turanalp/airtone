@@ -11,9 +11,18 @@
 // is excluded from the tap (--exclude-pid) or it would capture its own output
 // in a feedback loop.
 //
+// Anything on a CALL is excluded automatically and continuously. A meeting app
+// cancels echo by subtracting what it is about to play from what the mic hears.
+// Muting it and replaying its audio half a second later from another process
+// destroys that reference: cancellation fails and the person on the other end
+// hears themselves. A process with a live input stream is, by definition, on a
+// call — so its audio stays live and local and never enters the tap. Matching on
+// the microphone rather than on app names covers a browser tab and a native app
+// equally, with no list to maintain.
+//
 // Usage:
 //   systemtap --probe                      print "<rate>:16:2" and exit
-//   systemtap [--mute] [--exclude-pid N]…  stream s16le on stdout until killed
+//   systemtap [--mute] [--exclude-pid N] [--exclude-pid-optional N]…
 //
 // Teardown is load-bearing: a leaked tap leaves the Mac permanently muted, so
 // every exit path (SIGINT/SIGTERM/SIGHUP, closed stdout, fatal error) destroys
@@ -24,7 +33,8 @@ import Foundation
 
 // MARK: - CLI
 
-var excludedPIDs: [pid_t] = []
+var excludedPIDs: [pid_t] = []          // required: refuse to run without them
+var optionalExcludedPIDs: [pid_t] = []  // best-effort: skipped if not making audio
 var muteAtSource = false
 var probeOnly = false
 
@@ -36,13 +46,13 @@ while let arg = argv.first {
         muteAtSource = true
     case "--probe":
         probeOnly = true
-    case "--exclude-pid":
+    case "--exclude-pid", "--exclude-pid-optional":
         guard let raw = argv.first, let pid = pid_t(raw) else {
-            FileHandle.standardError.write("systemtap: --exclude-pid needs a number\n".data(using: .utf8)!)
+            FileHandle.standardError.write("systemtap: \(arg) needs a number\n".data(using: .utf8)!)
             exit(2)
         }
         argv.removeFirst()
-        excludedPIDs.append(pid)
+        if arg == "--exclude-pid" { excludedPIDs.append(pid) } else { optionalExcludedPIDs.append(pid) }
     default:
         FileHandle.standardError.write("systemtap: unknown argument \(arg)\n".data(using: .utf8)!)
         exit(2)
@@ -102,31 +112,93 @@ func processObject(pid: pid_t, waitFor timeout: TimeInterval = 5) -> AudioObject
     return nil
 }
 
+func allProcessObjects() -> [AudioObjectID] {
+    var addr = globalAddress
+    addr.mSelector = kAudioHardwarePropertyProcessObjectList
+    var size: UInt32 = 0
+    guard AudioObjectGetPropertyDataSize(systemObject, &addr, 0, nil, &size) == noErr else { return [] }
+    var ids = [AudioObjectID](repeating: 0, count: Int(size) / MemoryLayout<AudioObjectID>.size)
+    guard AudioObjectGetPropertyData(systemObject, &addr, 0, nil, &size, &ids) == noErr else { return [] }
+    return ids
+}
+
+func processFlag(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector) -> Bool {
+    var addr = globalAddress
+    addr.mSelector = selector
+    var value: UInt32 = 0
+    var size = UInt32(MemoryLayout<UInt32>.size)
+    guard AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &value) == noErr else { return false }
+    return value == 1
+}
+
+func processBundleID(_ object: AudioObjectID) -> String {
+    var addr = globalAddress
+    addr.mSelector = kAudioProcessPropertyBundleID
+    var value: CFString = "" as CFString
+    var size = UInt32(MemoryLayout<CFString>.size)
+    let status = withUnsafeMutablePointer(to: &value) {
+        AudioObjectGetPropertyData(object, &addr, 0, nil, &size, $0)
+    }
+    return status == noErr ? (value as String) : "?"
+}
+
+func processPID(_ object: AudioObjectID) -> pid_t {
+    var addr = globalAddress
+    addr.mSelector = kAudioProcessPropertyPID
+    var value: pid_t = -1
+    var size = UInt32(MemoryLayout<pid_t>.size)
+    guard AudioObjectGetPropertyData(object, &addr, 0, nil, &size, &value) == noErr else { return -1 }
+    return value
+}
+
+/// Every process with a live input stream — i.e. on a call. Tapping one breaks
+/// its echo cancellation, so these are excluded whatever the app happens to be:
+/// a Gather or Meet tab in a browser qualifies exactly like a native app does.
+/// Our own PID is skipped; the tap's aggregate device counts as input and we
+/// would otherwise flap in and out of our own exclusion set.
+func callProcesses() -> [pid_t: AudioObjectID] {
+    let mine = getpid()
+    var found: [pid_t: AudioObjectID] = [:]
+    for object in allProcessObjects() where processFlag(object, kAudioProcessPropertyIsRunningInput) {
+        let pid = processPID(object)
+        if pid > 0 && pid != mine { found[pid] = object }
+    }
+    return found
+}
+
 // MARK: - Teardown (idempotent, runs on every exit path)
 
 var tapID = AudioObjectID(kAudioObjectUnknown)
 var aggregateID = AudioObjectID(kAudioObjectUnknown)
 var ioProcID: AudioDeviceIOProcID?
-let teardownOnce = NSLock()
+let captureLock = NSLock()
 var toreDown = false
 
-func teardown() {
-    teardownOnce.lock()
-    defer { teardownOnce.unlock() }
-    if toreDown { return }
-    toreDown = true
-
+/// Tears down tap + aggregate + IO proc. Destroying the tap is what un-mutes the
+/// system, so this is the single most important routine in the program.
+/// Caller holds captureLock.
+func stopCapture() {
     if aggregateID != kAudioObjectUnknown, let proc = ioProcID {
         AudioDeviceStop(aggregateID, proc)
         AudioDeviceDestroyIOProcID(aggregateID, proc)
+        ioProcID = nil
     }
     if aggregateID != kAudioObjectUnknown {
         AudioHardwareDestroyAggregateDevice(aggregateID)
+        aggregateID = kAudioObjectUnknown
     }
-    // Destroying the tap is what un-mutes the system. Last and non-negotiable.
     if tapID != kAudioObjectUnknown {
         AudioHardwareDestroyProcessTap(tapID)
+        tapID = kAudioObjectUnknown
     }
+}
+
+func teardown() {
+    captureLock.lock()
+    defer { captureLock.unlock() }
+    if toreDown { return }
+    toreDown = true
+    stopCapture()
 }
 
 // MARK: - Ring buffer (realtime callback -> writer thread)
@@ -208,6 +280,14 @@ func writeAll(_ bytes: UnsafeRawPointer, _ count: Int) -> Bool {
     return true
 }
 
+@inline(__always)
+func toInt16(_ sample: Float) -> Int16 {
+    let scaled = sample * 32767.0
+    if scaled >= 32767 { return 32767 }
+    if scaled <= -32768 { return -32768 }
+    return Int16(scaled)
+}
+
 // MARK: - Startup deadlock
 
 /// A throwaway tap, purely to learn the device's format before we commit to one.
@@ -254,7 +334,7 @@ func resolveWhilePumpingSilence(
     return nil
 }
 
-// MARK: - Build the tap
+// MARK: - Capture
 
 guard let outputUID = defaultOutputUID() else {
     log("no default output device")
@@ -270,7 +350,88 @@ if probeOnly {
     exit(0)
 }
 
-var excludedObjects: [AudioObjectID] = []
+let ring = Ring(capacity: 1 << 19) // 512 KB ≈ 2.7 s at 48k/16/2
+let stopped = DispatchSemaphore(value: 0)
+
+/// Builds a tap excluding `exclusions`, wraps it in an aggregate device, and
+/// starts pulling audio into the ring. Called again whenever the call set
+/// changes, since a tap's exclusion list is fixed at creation.
+/// Caller holds captureLock.
+func startCapture(excluding exclusions: [AudioObjectID]) -> Bool {
+    let description = CATapDescription(stereoGlobalTapButExcludeProcesses: exclusions)
+    description.name = "AirTone Tap"
+    description.uuid = UUID()
+    description.isPrivate = true
+    description.muteBehavior = muteAtSource ? .mutedWhenTapped : .unmuted
+
+    var status = AudioHardwareCreateProcessTap(description, &tapID)
+    if status != noErr { log("create process tap failed (\(status))"); return false }
+
+    var formatAddress = globalAddress
+    formatAddress.mSelector = kAudioTapPropertyFormat
+    var asbd = AudioStreamBasicDescription()
+    var asbdSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
+    status = AudioObjectGetPropertyData(tapID, &formatAddress, 0, nil, &asbdSize, &asbd)
+    if status != noErr { log("read tap format failed (\(status))"); return false }
+
+    // The stream we already announced to snapserver cannot change shape mid-flight.
+    guard Int(asbd.mSampleRate.rounded()) == sampleRate,
+          Int(asbd.mChannelsPerFrame) == channels,
+          asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0
+    else {
+        log("device format changed under us (expected \(sampleRate):16:\(channels))")
+        return false
+    }
+    let nonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
+
+    let aggregateDescription: [String: Any] = [
+        kAudioAggregateDeviceNameKey: "AirTone Tap Aggregate",
+        kAudioAggregateDeviceUIDKey: UUID().uuidString,
+        kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+        kAudioAggregateDeviceIsPrivateKey: true,
+        kAudioAggregateDeviceIsStackedKey: false,
+        kAudioAggregateDeviceTapAutoStartKey: true,
+        kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
+        kAudioAggregateDeviceTapListKey: [[
+            kAudioSubTapDriftCompensationKey: true,
+            kAudioSubTapUIDKey: description.uuid.uuidString,
+        ]],
+    ]
+    status = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &aggregateID)
+    if status != noErr { log("create aggregate device failed (\(status))"); return false }
+
+    status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil) { _, inputData, _, _, _ in
+        let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+        guard let first = buffers.first, first.mData != nil else { return }
+
+        if nonInterleaved {
+            let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size
+            var interleaved = [Int16](repeating: 0, count: frames * buffers.count)
+            for (channel, buffer) in buffers.enumerated() {
+                guard let raw = buffer.mData else { continue }
+                let samples = raw.bindMemory(to: Float.self, capacity: frames)
+                for frame in 0..<frames {
+                    interleaved[frame * buffers.count + channel] = toInt16(samples[frame])
+                }
+            }
+            interleaved.withUnsafeBytes { ring.write($0.baseAddress!, $0.count) }
+        } else {
+            let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size
+            let samples = first.mData!.bindMemory(to: Float.self, capacity: count)
+            var pcm = [Int16](repeating: 0, count: count)
+            for i in 0..<count { pcm[i] = toInt16(samples[i]) }
+            pcm.withUnsafeBytes { ring.write($0.baseAddress!, $0.count) }
+        }
+    }
+    if status != noErr { log("create IO proc failed (\(status))"); return false }
+
+    status = AudioDeviceStart(aggregateID, ioProcID)
+    if status != noErr { log("start capture failed (\(status))"); return false }
+    return true
+}
+
+// Required exclusions first — without them we would tap our own playback.
+var requiredObjects: [AudioObjectID] = []
 if !excludedPIDs.isEmpty {
     log("waiting for \(excludedPIDs.count) process(es) to open audio (streaming silence meanwhile)")
     guard let resolved = resolveWhilePumpingSilence(
@@ -279,88 +440,23 @@ if !excludedPIDs.isEmpty {
         log("excluded process never opened audio — refusing to run without the exclusion (feedback risk)")
         exit(1)
     }
-    excludedObjects = resolved
+    requiredObjects = resolved
+}
+// Best-effort exclusions: a process with no audio object is making no sound.
+requiredObjects.append(contentsOf: optionalExcludedPIDs.compactMap { processObject(pid: $0, waitFor: 0) })
+
+var callPIDs = Set<pid_t>()
+let initialCalls = callProcesses()
+callPIDs = Set(initialCalls.keys)
+if !initialCalls.isEmpty {
+    log("excluding \(initialCalls.count) process(es) on a call: "
+        + initialCalls.values.map(processBundleID).joined(separator: ", "))
 }
 
-let description = CATapDescription(stereoGlobalTapButExcludeProcesses: excludedObjects)
-description.name = "AirTone Tap"
-description.uuid = UUID()
-description.isPrivate = true
-description.muteBehavior = muteAtSource ? .mutedWhenTapped : .unmuted
-
-var status = AudioHardwareCreateProcessTap(description, &tapID)
-if status != noErr { bail("create process tap", status) }
-
-var formatAddress = globalAddress
-formatAddress.mSelector = kAudioTapPropertyFormat
-var asbd = AudioStreamBasicDescription()
-var asbdSize = UInt32(MemoryLayout<AudioStreamBasicDescription>.size)
-status = AudioObjectGetPropertyData(tapID, &formatAddress, 0, nil, &asbdSize, &asbd)
-if status != noErr { bail("read tap format", status) }
-
-// The stream we already announced to snapserver cannot change shape mid-flight.
-if Int(asbd.mSampleRate.rounded()) != sampleRate || Int(asbd.mChannelsPerFrame) != channels {
-    bail("device format changed while starting up (was \(sampleRate):16:\(channels))", 0)
-}
-
-guard asbd.mFormatFlags & kAudioFormatFlagIsFloat != 0 else {
-    bail("tap format is not float32 (got flags \(asbd.mFormatFlags))", 0)
-}
-let nonInterleaved = asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved != 0
-
-let aggregateDescription: [String: Any] = [
-    kAudioAggregateDeviceNameKey: "AirTone Tap Aggregate",
-    kAudioAggregateDeviceUIDKey: UUID().uuidString,
-    kAudioAggregateDeviceMainSubDeviceKey: outputUID,
-    kAudioAggregateDeviceIsPrivateKey: true,
-    kAudioAggregateDeviceIsStackedKey: false,
-    kAudioAggregateDeviceTapAutoStartKey: true,
-    kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
-    kAudioAggregateDeviceTapListKey: [[
-        kAudioSubTapDriftCompensationKey: true,
-        kAudioSubTapUIDKey: description.uuid.uuidString,
-    ]],
-]
-status = AudioHardwareCreateAggregateDevice(aggregateDescription as CFDictionary, &aggregateID)
-if status != noErr { bail("create aggregate device", status) }
-
-// MARK: - Capture
-
-let ring = Ring(capacity: 1 << 19) // 512 KB ≈ 2.7 s at 48k/16/2
-let stopped = DispatchSemaphore(value: 0)
-
-status = AudioDeviceCreateIOProcIDWithBlock(&ioProcID, aggregateID, nil) { _, inputData, _, _, _ in
-    let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
-    guard let first = buffers.first, first.mData != nil else { return }
-
-    if nonInterleaved {
-        let frames = Int(first.mDataByteSize) / MemoryLayout<Float>.size
-        var interleaved = [Int16](repeating: 0, count: frames * buffers.count)
-        for (channel, buffer) in buffers.enumerated() {
-            guard let raw = buffer.mData else { continue }
-            let samples = raw.bindMemory(to: Float.self, capacity: frames)
-            for frame in 0..<frames {
-                interleaved[frame * buffers.count + channel] = toInt16(samples[frame])
-            }
-        }
-        interleaved.withUnsafeBytes { ring.write($0.baseAddress!, $0.count) }
-    } else {
-        let count = Int(first.mDataByteSize) / MemoryLayout<Float>.size
-        let samples = first.mData!.bindMemory(to: Float.self, capacity: count)
-        var pcm = [Int16](repeating: 0, count: count)
-        for i in 0..<count { pcm[i] = toInt16(samples[i]) }
-        pcm.withUnsafeBytes { ring.write($0.baseAddress!, $0.count) }
-    }
-}
-if status != noErr { bail("create IO proc", status) }
-
-@inline(__always)
-func toInt16(_ sample: Float) -> Int16 {
-    let scaled = sample * 32767.0
-    if scaled >= 32767 { return 32767 }
-    if scaled <= -32768 { return -32768 }
-    return Int16(scaled)
-}
+captureLock.lock()
+let started = startCapture(excluding: requiredObjects + Array(initialCalls.values))
+captureLock.unlock()
+if !started { teardown(); exit(1) }
 
 // Ignore SIGPIPE so a closed stdout surfaces as an EPIPE we can clean up after,
 // rather than a signal that kills us with the tap still muting the Mac.
@@ -374,10 +470,7 @@ for sig in [SIGINT, SIGTERM, SIGHUP] {
     signalSources.append(source)
 }
 
-status = AudioDeviceStart(aggregateID, ioProcID)
-if status != noErr { bail("start capture", status) }
-
-log("capturing \(sampleRate)Hz/\(channels)ch\(muteAtSource ? ", muted at source" : "")\(excludedObjects.isEmpty ? "" : ", excluding \(excludedPIDs.count) process(es)")")
+log("capturing \(sampleRate)Hz/\(channels)ch\(muteAtSource ? ", muted at source" : "")\(requiredObjects.isEmpty ? "" : ", excluding \(requiredObjects.count) process(es)")")
 
 let writer = Thread {
     var chunk = [UInt8](repeating: 0, count: 8192)
@@ -392,8 +485,38 @@ let writer = Thread {
 }
 writer.start()
 
+// Joining or leaving a call changes who must be excluded, and a tap's exclusion
+// list is fixed at creation — so the tap gets rebuilt. The ring keeps the stream
+// flowing across the swap; the cost is one brief discontinuity, paid only when a
+// call starts or ends, in exchange for never echoing into someone's meeting.
+let monitor = Thread {
+    while true {
+        Thread.sleep(forTimeInterval: 2)
+        captureLock.lock()
+        if toreDown { captureLock.unlock(); return }
+        let current = callProcesses()
+        let pids = Set(current.keys)
+        if pids != callPIDs {
+            let joined = pids.subtracting(callPIDs).count
+            let left = callPIDs.subtracting(pids).count
+            log("call set changed (+\(joined)/-\(left)) — rebuilding the tap; on a call now: "
+                + (current.values.map(processBundleID).joined(separator: ", ")
+                   .isEmpty ? "nobody" : current.values.map(processBundleID).joined(separator: ", ")))
+            callPIDs = pids
+            stopCapture()
+            if !startCapture(excluding: requiredObjects + Array(current.values)) {
+                log("could not rebuild the tap")
+                captureLock.unlock()
+                stopped.signal()
+                return
+            }
+        }
+        captureLock.unlock()
+    }
+}
+monitor.start()
+
 stopped.wait()
-AudioDeviceStop(aggregateID, ioProcID)
 ring.close()
 teardown()
 if ring.overruns > 0 { log("\(ring.overruns) buffer overrun(s) — the reader could not keep up") }

@@ -11,6 +11,31 @@ SNAPWEB_DIR="$AIRTONE_HOME/snapweb"
 BIN_DIR="$AIRTONE_HOME/engine/bin"
 TAP_BIN="$BIN_DIR/airtone-tap"
 
+# Apps whose audio must NOT be captured, matched against the process command line.
+# Meeting apps run their own echo cancellation: that canceller subtracts what the
+# app itself is about to play. If AirTone mutes the app and replays its audio half
+# a second later from snapclient, the reference no longer matches what the mic
+# hears, cancellation fails, and the person on the other end hears themselves.
+# So meeting audio stays live and local; everything else still goes to the phone.
+# Browsers are deliberately absent — excluding one would also drop its music.
+# Add your own (comma-separated substrings) with AIRTONE_EXCLUDE_APPS.
+MEETING_APPS="zoom.us,Microsoft Teams,Webex,FaceTime,Discord,Slack,RingCentral,GoTo,BlueJeans"
+EXCLUDE_APPS="${AIRTONE_EXCLUDE_APPS:-$MEETING_APPS}"
+
+# Resolve EXCLUDE_APPS to --exclude-pid-optional flags. Optional because an app
+# that is not running, or not making sound, has nothing to exclude.
+exclude_app_flags() {
+  local flags="" name pid
+  [ -z "$EXCLUDE_APPS" ] && return 0
+  while IFS= read -r name; do
+    [ -z "$name" ] && continue
+    while IFS= read -r pid; do
+      [ -n "$pid" ] && flags="$flags --exclude-pid-optional $pid"
+    done <<< "$(pgrep -if "$name" 2>/dev/null)"
+  done <<< "$(echo "$EXCLUDE_APPS" | tr ',' '\n')"
+  echo "$flags"
+}
+
 # Tunables.
 BUFFER="${AIRTONE_BUFFER:-500}"        # snapcast end-to-end delay; every client shares it
 CODEC="${AIRTONE_CODEC:-opus}"         # opus: bandwidth-friendly for multiple synced clients

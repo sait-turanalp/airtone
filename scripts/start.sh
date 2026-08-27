@@ -65,7 +65,9 @@ fi
 
 echo "==> Starting the system tap..."
 : > "$AIRTONE_HOME/tap.log"
-"$TAP_BIN" --mute --exclude-pid "$SNAPCLIENT_PID" > "$FIFO" 2>"$AIRTONE_HOME/tap.log" &
+# shellcheck disable=SC2046  # word splitting is how the flags are passed
+"$TAP_BIN" --mute --exclude-pid "$SNAPCLIENT_PID" $(exclude_app_flags) \
+  > "$FIFO" 2>"$AIRTONE_HOME/tap.log" &
 TAP_PID=$!
 
 # The tap streams silence until snapclient opens its audio device, then swaps in
