@@ -1,4 +1,9 @@
-<h1 align="center">AirTone 🔊</h1>
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/brand/wordmark-dark.svg">
+    <img alt="AirTone — Mac audio on every phone, in sync" src="docs/brand/wordmark-light.svg" width="440">
+  </picture>
+</p>
 
 <p align="center"><b>Play your Mac's sound on your phone — in sync, gapless, no app to install.</b></p>
 
