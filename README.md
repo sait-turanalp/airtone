@@ -6,7 +6,7 @@
 
 <p align="center">
   <a href="https://github.com/sait-turanalp/airtone/releases"><img alt="Release" src="https://img.shields.io/github/v/release/sait-turanalp/airtone?sort=semver&color=2ea44f"></a>
-  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-yellow.svg"></a>
+  <a href="LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/badge/license-GPL--3.0-blue.svg"></a>
   <img alt="Platform: macOS 11+" src="https://img.shields.io/badge/platform-macOS%2011%2B-black?logo=apple&logoColor=white">
   <img alt="Built with Go" src="https://img.shields.io/badge/built%20with-Go-00ADD8?logo=go&logoColor=white">
   <img alt="No app required" src="https://img.shields.io/badge/phone-no%20app%20required-7c3aed">
@@ -102,7 +102,7 @@ Full design notes: [ARCHITECTURE.md](ARCHITECTURE.md).
 | Modern, iOS-26-style web player | ✅ | — | ❌ |
 | Gapless, drift-free capture out of the box | ✅ | ✅ | ⚠️ you wire it |
 | One command to install + guided setup | ✅ | n/a | ❌ |
-| Open source | ✅ MIT | ❌ | ✅ GPL |
+| Open source | ✅ GPL-3.0 | ❌ | ✅ GPL |
 
 ## Requirements
 
@@ -132,4 +132,5 @@ Contributions welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The reasoning 
 
 ## License
 
-[MIT](LICENSE) © Sait Turanalp
+[GPL-3.0](LICENSE) © Sait Turanalp — see [COPYRIGHT](COPYRIGHT).
+Releases up to v0.3.3 were MIT; the browser player now builds on Snapcast's GPL-3.0 streaming engine.

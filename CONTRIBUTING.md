@@ -50,4 +50,4 @@ Keep them concise and descriptive. Do **not** add `Co-Authored-By` trailers.
 
 ## License
 
-By contributing, you agree your contributions are licensed under the [MIT License](LICENSE).
+By contributing, you agree your contributions are licensed under the [GNU General Public License v3.0](LICENSE).

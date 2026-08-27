@@ -29,7 +29,7 @@ brews:
       token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
     homepage: "https://github.com/sait-turanalp/airtone"
     description: "Stream your Mac's system audio to your phone in sync — gapless, no app required."
-    license: MIT
+    license: GPL-3.0
     dependencies:
       - name: snapcast
       - name: ffmpeg

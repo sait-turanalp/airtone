@@ -4,7 +4,7 @@
 # AirTone — agent context
 
 macOS-only Go CLI/TUI that turns a Mac into a synced, multi-room audio bridge: system audio →
-phones/speakers, played in the **browser, no app**. Two modes, one self-contained binary. MIT.
+phones/speakers, played in the **browser, no app**. Two modes, one self-contained binary. GPL-3.0.
 
 **Mental model (the flow):**
 ```

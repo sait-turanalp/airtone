@@ -1,6 +1,6 @@
 # Third-party components
 
-AirTone is MIT-licensed. It bundles and depends on the following.
+AirTone is licensed under the GNU General Public License v3.0. It bundles and depends on the following.
 
 ## Bundled (embedded in the binary)
 
@@ -29,4 +29,4 @@ AirTone is MIT-licensed. It bundles and depends on the following.
 - **Snapweb** (GPL-3.0) — the browser player served (unmodified) in Party mode
 
 These are invoked as separate programs; their source is not incorporated into
-AirTone's MIT-licensed code.
+AirTone's GPL-3.0-licensed code.
