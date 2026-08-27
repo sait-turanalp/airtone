@@ -1,7 +1,6 @@
-// Gets/sets the BUILT-IN output device's volume (0-100). We target the built-in
-// device directly because while AirTone streams, the default output is the
-// "AirTone Sync" aggregate, which has no master volume (osascript returns
-// "missing value"). The built-in speakers are the audible leg of that aggregate.
+// Gets/sets the BUILT-IN output device's volume (0-100). Talking to CoreAudio
+// directly keeps a long-lived `serve` loop possible, so dragging the phone's
+// volume slider doesn't spawn an osascript process per change.
 //
 // Usage:  volume get          -> prints 0-100
 //         volume set <0-100>   -> sets it once

@@ -33,8 +33,7 @@ import (
 var adapterTar []byte
 
 // volumeSrc is a tiny CoreAudio helper compiled once at runtime; it sets the
-// built-in output volume directly (the "AirTone Sync" aggregate has no master
-// volume, so osascript can't be used while streaming).
+// built-in output volume directly, without shelling out to osascript per change.
 //
 //go:embed volume.swift
 var volumeSrc []byte

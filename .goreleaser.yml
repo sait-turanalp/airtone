@@ -32,14 +32,13 @@ brews:
     license: MIT
     dependencies:
       - name: snapcast
-      - name: sox
-      - name: switchaudio-osx
       - name: ffmpeg
     caveats: |
-      AirTone also needs the BlackHole 2ch audio driver, which cannot be a
-      formula dependency. Install it once (needs admin + a reboot):
+      AirTone captures system audio with a CoreAudio process tap, so it needs
+      macOS 14.2 or newer and the Xcode command line tools (the tap is compiled
+      once during setup):
 
-        brew install --cask blackhole-2ch
+        xcode-select --install
 
       Then run:  airtone setup
 

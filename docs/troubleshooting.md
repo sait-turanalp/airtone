@@ -22,12 +22,15 @@ How we proved it (you can too):
    mis-timing samples.
 
 Two root causes and their fixes:
-- **`ffmpeg -f avfoundation` drops samples.** Replaced with **`sox -t coreaudio`**,
-  which is callback-driven and gapless.
-- **Multi-Output clock drift.** When BlackHole is a *non-master* sub-device, macOS
-  resamples it and the capture timing wobbles → snapserver resyncs several times a
-  second → audible glitches. Fix: make **BlackHole the master/clock device** of the
-  Multi-Output (AirTone's setup does this).
+- **`ffmpeg -f avfoundation` drops samples.** Replaced with callback-driven capture.
+- **Multi-Output clock drift.** When BlackHole was a *non-master* sub-device, macOS
+  resampled it and the capture timing wobbled → snapserver resynced several times a
+  second → audible glitches. Fixed at the time by making BlackHole the master clock.
+
+> **Superseded (2026-08).** Both of those belong to the old BlackHole + Multi-Output
+> + sox path. Capture is now a **CoreAudio process tap**, which is driven by the
+> device's own IO callback and has no second clock to drift against — the whole class
+> of problem is gone, along with the driver install.
 
 Quick diagnostic: watch the resync rate in the server log.
 ```
@@ -43,10 +46,15 @@ stutters, suspect the capture, not the client.
 
 - Is something actually playing on the Mac, and is the output set to **AirTone Sync**?
   (`airtone start` sets it; `airtone status` should show the stream `playing`.)
-- If you tried a Core Audio *tap*–based capturer (e.g. AudioTee) and got silence:
-  that path needs `kTCCServiceAudioCapture` permission, which is **not** granted to
-  CLI tools launched outside a TCC-aware terminal — it silently returns zeros. This
-  is exactly why AirTone uses **BlackHole + sox** instead, which has no such wall.
+- **A tap that records pure silence** is a permissions problem, not a bug. macOS
+  gates system-audio capture behind a one-time consent prompt attached to the app
+  that launched the process — your terminal, or AirTone itself. If the tap runs but
+  every sample is zero, grant that app audio/screen-recording permission in
+  System Settings → Privacy & Security, then restart it.
+  (An earlier version of this document claimed the tap path *always* returns zeros
+  for CLI tools and that BlackHole was therefore unavoidable. That was measured to be
+  wrong: `systemtap.swift` captures real audio from the terminal. The claim is
+  retracted.)
 
 ## "The phone page is blank / shows a default page"
 
@@ -86,7 +94,7 @@ dominates end-to-end latency. The page's live readout shows it:
   total lands ~130ms — the realistic A-tier floor for browser-on-iOS.
 - **Don't force it lower.** Aggressive settings (tiny target, a wall-clock pacer)
   make NetEQ oscillate (100-400ms) — worse than a stable ~130ms. Let the audio
-  source clock (sox) pace delivery; it's steadier than any Go pacer.
+  source clock (the tap) pace delivery; it's steadier than any Go pacer.
 
 To actually go lower:
 - **Android Chrome** honors the buffer hints → typically ~30-60ms on the same LAN.
@@ -116,23 +124,29 @@ used while streaming has no master volume, so `osascript set volume` can't drive
 it). If volume seems to do nothing, your audible output isn't the built-in
 speakers.
 
-## "The macOS volume keys / menu slider don't change the sound while streaming"
+## "In Party mode the Mac itself goes quiet"
 
-Expected — it's a macOS limitation, not an AirTone bug. While streaming, the
-system output is the **AirTone Sync Multi-Output device**, and macOS Multi-Output
-(and Aggregate) devices have **no master volume**: the volume keys grey out and
-the menu slider is a no-op for them.
+That is the design, not a fault. Party mode mutes the Mac's own output at the
+source and plays the audio back through a local `snapclient` instead. That is the
+only way the Mac can sit on the same clock as your phone — otherwise it runs a
+full buffer ahead and the two can't be used together.
 
-Control volume from the **AirTone app's slider** instead — it sets the built-in
-speakers' volume directly via CoreAudio, so it always works. (The keys/menu work
-again as soon as you switch back to a normal output, which AirTone does for you
-on exit.)
+The mute lives exactly as long as the tap process, so `airtone stop`, quitting the
+TUI, Ctrl+C, or even closing the terminal all bring the Mac's sound straight back.
+If the Mac is ever left silent, the tap leaked — kill it:
+
+```
+pkill -f airtone-tap
+```
+
+Instant mode does **not** mute: there is no local player there, so the Mac keeps
+playing normally and only the phone trails behind.
 
 ## Hard reset
 
 ```
 airtone stop
-pkill -x snapserver; pkill -x sox
+pkill -x snapserver; pkill -x snapclient; pkill -f airtone-tap
 rm -rf ~/.airtone
 airtone setup
 ```

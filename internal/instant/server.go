@@ -5,7 +5,7 @@
 // plays with ~tens of ms latency on a good LAN — at the cost of cross-device
 // sync. It stays app-free: the phone just opens a page (scan the QR).
 //
-// Pipeline: sox (gapless BlackHole capture) | ffmpeg (Opus/Ogg) -> oggreader
+// Pipeline: airtone-tap (CoreAudio process tap) | ffmpeg (Opus/Ogg) -> oggreader
 // -> a pion Opus track shared by every connected browser.
 package instant
 
@@ -25,6 +25,7 @@ import (
 	"github.com/pion/webrtc/v4/pkg/media"
 	"github.com/pion/webrtc/v4/pkg/media/oggreader"
 
+	"github.com/sait-turanalp/airtone/internal/engine"
 	"github.com/sait-turanalp/airtone/internal/remote"
 )
 
@@ -37,15 +38,21 @@ var listeners atomic.Int64
 // Listeners returns the number of connected browser clients.
 func Listeners() int { return int(listeners.Load()) }
 
-// capturePipeline: gapless capture (sox) piped into a low-delay Opus encoder
-// (ffmpeg), muxed as Ogg on stdout for the oggreader.
+// capturePipeline: the system tap piped into a low-delay Opus encoder (ffmpeg),
+// muxed as Ogg on stdout for the oggreader.
 // One 20ms Opus frame per Ogg page (page_duration matches frame_duration) so
 // each page is exactly one Opus packet — required for valid per-packet RTP.
-// flush_packets emits each page immediately; sox's real-time capture clock
+// flush_packets emits each page immediately; the tap's real-time capture clock
 // paces delivery far more steadily than any wall-clock pacer in Go would.
-const capturePipeline = `sox -q -t coreaudio "BlackHole 2ch" -t raw -b 16 -e signed-integer -c 2 -r 48000 - | ` +
-	`ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i - ` +
-	`-c:a libopus -b:a 128k -application lowdelay -frame_duration 20 -page_duration 20000 -flush_packets 1 -f ogg -`
+//
+// Instant mode does NOT mute at source: there is no local snapclient to play the
+// audio back, so the Mac keeps playing normally and the phone trails by the
+// WebRTC jitter buffer alone.
+func capturePipeline() string {
+	return `"` + engine.TapBin() + `" | ` +
+		`ffmpeg -hide_banner -loglevel error -f s16le -ar 48000 -ac 2 -i - ` +
+		`-c:a libopus -b:a 128k -application lowdelay -frame_duration 20 -page_duration 20000 -flush_packets 1 -f ogg -`
+}
 
 // Run starts the capture pipeline and the HTTP/WebRTC server until ctx is done.
 func Run(ctx context.Context, port int) error {
@@ -93,10 +100,10 @@ func portAddr(p int) string {
 	return ":" + itoa(p)
 }
 
-// startCapture launches sox|ffmpeg and pumps Ogg/Opus pages into the track.
+// startCapture launches tap|ffmpeg and pumps Ogg/Opus pages into the track.
 func startCapture(ctx context.Context, track *webrtc.TrackLocalStaticSample) error {
-	cmd := exec.Command("bash", "-c", capturePipeline)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group, so we can kill sox+ffmpeg together
+	cmd := exec.Command("bash", "-c", capturePipeline())
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true} // own group, so we can kill tap+ffmpeg together
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		return err
@@ -116,7 +123,7 @@ func startCapture(ctx context.Context, track *webrtc.TrackLocalStaticSample) err
 	}()
 
 	// Write each Opus frame to the track as its Ogg page arrives. Delivery is
-	// paced by sox's audio capture clock (steadier than a Go wall-clock pacer),
+	// paced by the tap's audio capture clock (steadier than a Go wall-clock pacer),
 	// and per-page granule deltas give exact sample durations.
 	go func() {
 		ogg, _, err := oggreader.NewWith(stdout)

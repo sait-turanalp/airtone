@@ -17,7 +17,6 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 
@@ -99,50 +98,27 @@ type model struct {
 
 	checks   []doctor.Check
 	ready    bool // all Party checks pass
-	syncOK   bool // AirTone Sync device present (needed by both modes)
+	syncOK   bool // system tap built (needed by both modes)
 	ffmpegOK bool // ffmpeg present (needed by Instant)
 	status   *rpc.Status
 	bufferMS int
 
 	instantOn     bool
 	instantCancel context.CancelFunc
-	instantPrev   string
 
 	busy string // async op label; spinner shows while set
 	note string // inline message; cleared on next interaction
 }
 
-// AirTone switches the system output to its Multi-Output device while running.
-// On *any* exit — q, Ctrl+C, or a closed terminal (SIGHUP) — we put the output
-// back. fireRestore is unconditional and idempotent: if we're still on AirTone's
-// device, return to the remembered previous one (or the built-in speakers).
-var (
-	restoreMu sync.Mutex
-	restoreTo string
-)
-
-func rememberPrev(prev string) {
-	if prev == "" || prev == engine.SyncDevice {
-		return
-	}
-	restoreMu.Lock()
-	restoreTo = prev
-	restoreMu.Unlock()
-}
-
-func fireRestore() {
-	if engine.CurrentOutput() != engine.SyncDevice {
-		return
-	}
-	restoreMu.Lock()
-	t := restoreTo
-	restoreMu.Unlock()
-	if t == "" {
-		t = engine.BuiltinOutput()
-	}
-	if t != "" {
-		_ = engine.SetOutput(t)
-	}
+// AirTone never switches the system output device — capture is a CoreAudio
+// process tap — so there is no device state to remember or put back. What the
+// tap DOES hold is a source-level mute of the Mac's own audio, and that lives
+// only as long as the tap process. So every exit path must kill it: q, Ctrl+C,
+// and a closed terminal (SIGHUP, which skips the normal quit path entirely).
+// engine.Stop is idempotent, which makes calling it on every path free insurance.
+func fireTeardown() {
+	var b bytes.Buffer
+	_ = engine.Stop(&b)
 }
 
 // Run launches the interactive TUI. Default mode is Instant (low latency).
@@ -159,14 +135,14 @@ func Run() error {
 	sp.Style = m.styles.Key
 	m.spin = sp
 
-	// Closing the terminal sends SIGHUP, which skips the normal quit path — restore
-	// the audio output ourselves on the way out (only if Instant armed it).
+	// Closing the terminal sends SIGHUP, which skips the normal quit path — tear
+	// the tap down ourselves on the way out, or the Mac stays muted.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGHUP)
-	go func() { <-sig; fireRestore(); os.Exit(0) }()
+	go func() { <-sig; fireTeardown(); os.Exit(0) }()
 
 	_, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
-	fireRestore() // safety net for Ctrl+C / normal quit
+	fireTeardown() // safety net for Ctrl+C / normal quit
 	return err
 }
 
@@ -229,11 +205,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if key.Matches(msg, m.keys.Quit) {
 			m.stopInstant()
-			if m.mode == modeParty {
-				var b bytes.Buffer
-				_ = engine.Stop(&b) // stop snapserver + restore the output
-			}
-			fireRestore() // return to the previous device on every quit
+			fireTeardown() // kills snapserver, snapclient and the tap (un-mutes)
 			return m, tea.Quit
 		}
 		m.note = "" // clear stale message on any interaction
@@ -266,7 +238,7 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ffmpegOK = msg.ffmpegOK
 		m.syncOK = false
 		for _, c := range msg.checks {
-			if strings.Contains(c.Name, "AirTone Sync") {
+			if strings.Contains(c.Name, "system tap") {
 				m.syncOK = c.OK
 			}
 		}
@@ -338,9 +310,6 @@ func (m model) start() (tea.Model, tea.Cmd) {
 			m.note = "instant needs ffmpeg — brew install ffmpeg"
 			return m, nil
 		}
-		m.instantPrev = engine.CurrentOutput()
-		_ = engine.SetOutput(engine.SyncDevice)
-		rememberPrev(m.instantPrev) // restore on any exit, incl. a closed terminal
 		ctx, cancel := context.WithCancel(context.Background())
 		m.instantCancel = cancel
 		go func() { _ = instant.Run(ctx, instant.Port) }()
@@ -352,7 +321,6 @@ func (m model) start() (tea.Model, tea.Cmd) {
 		m.note = "run setup first (g)"
 		return m, nil
 	}
-	rememberPrev(engine.CurrentOutput()) // so quit / close returns to this device
 	m.busy = "Starting…"
 	return m, tea.Batch(startEngine, m.spin.Tick)
 }
@@ -376,13 +344,6 @@ func (m *model) stopInstant() {
 	if m.instantCancel != nil {
 		m.instantCancel()
 		m.instantCancel = nil
-	}
-	target := m.instantPrev
-	if target == "" || target == engine.SyncDevice {
-		target = engine.BuiltinOutput()
-	}
-	if target != "" {
-		_ = engine.SetOutput(target)
 	}
 	m.instantOn = false
 }
@@ -608,7 +569,7 @@ func (m model) renderInstantIdle() string {
 			"Press " + st.Key.Render("s") + " to start.")
 	}
 	lines := []string{st.PanelTitle.Render("Instant mode — setup needed"), ""}
-	lines = append(lines, m.checkLine("AirTone Sync device", m.syncOK, "run setup (g)"))
+	lines = append(lines, m.checkLine("system tap", m.syncOK, "run setup (g)"))
 	lines = append(lines, m.checkLine("ffmpeg", m.ffmpegOK, "brew install ffmpeg"))
 	return st.Panel.Render(strings.Join(lines, "\n"))
 }

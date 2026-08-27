@@ -29,10 +29,10 @@ Usage:
   airtone <command>
 
 Commands:
-  setup     One-time setup (Multi-Output device + Snapweb player)
+  setup     One-time setup (system tap + Snapweb player)
   party     Multi-device synced playback (~1s delay)  [alias: start]
   instant   Low-latency mode over WebRTC (~tens of ms, single/loose)
-  stop      Stop party mode and restore output
+  stop      Stop party mode
   status    Show live stream and listener status
   doctor    Diagnose the setup (devices, ports, permissions)
   version   Print the version
@@ -134,7 +134,7 @@ func runDoctor() {
 }
 
 func runInstant() {
-	if !engine.DeviceExists(engine.SyncDevice) {
+	if _, err := os.Stat(engine.TapBin()); err != nil {
 		fmt.Fprintln(os.Stderr, "airtone: not set up yet — run: airtone setup")
 		os.Exit(1)
 	}
@@ -143,30 +143,14 @@ func runInstant() {
 		os.Exit(1)
 	}
 
-	prev := engine.CurrentOutput()
-	if err := engine.SetOutput(engine.SyncDevice); err != nil {
-		fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
-		os.Exit(1)
-	}
-	restore := func() {
-		target := prev
-		if target == "" || target == engine.SyncDevice {
-			target = engine.BuiltinOutput() // fall back to speakers
-		}
-		if target != "" {
-			_ = engine.SetOutput(target)
-		}
-	}
-
-	// Catch SIGHUP (terminal close) too, so the output is restored on every exit
-	// path — not just Ctrl+C — and the user's default device is left clean.
+	// Catch SIGHUP (terminal close) too, so the capture is torn down on every
+	// exit path — not just Ctrl+C.
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
 	defer stop()
 
 	fmt.Println("AirTone instant mode (WebRTC, low latency)")
 	fmt.Printf("  open on your phone: http://%s:%d\n", engine.LANIP(), instant.Port)
 	fmt.Println("  play audio on the Mac · press q or Ctrl+C to stop")
-	fmt.Println("  tip: control volume from the app — macOS volume keys don't affect a Multi-Output device")
 
 	// Single-key 'q' to quit (raw mode). In raw mode Ctrl+C arrives as a byte, so
 	// handle 0x03/0x04 here too. Restored to cooked mode before we print/return.
@@ -192,12 +176,11 @@ func runInstant() {
 
 	err := instant.Run(ctx, instant.Port)
 	if restoreTerm != nil {
-		restoreTerm() // back to cooked mode before restoring audio / printing
+		restoreTerm() // back to cooked mode before printing
 	}
-	restore()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "airtone: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println("\nstopped, audio restored.")
+	fmt.Println("\nstopped.")
 }

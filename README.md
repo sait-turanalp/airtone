@@ -25,9 +25,9 @@
   <img src="ss.png" alt="AirTone — the phone web remote, an iOS-26 liquid-glass player" width="620">
 </p>
 
-AirTone is a local audio **engine** for macOS. It unifies a virtual sound driver, a gapless capture stage, and a sample-accurate sync server into a single tool — so whatever plays on your Mac also plays on your phone, perfectly in sync. The phone just opens a web page (scan a QR code) — **nothing to install** — and doubles as a polished remote for your Mac's playback.
+AirTone is a local audio **engine** for macOS. It unifies a driver-free system-audio tap, a gapless capture stage, and a sample-accurate sync server into a single tool — so whatever plays on your Mac also plays on your phone, perfectly in sync. The phone just opens a web page (scan a QR code) — **nothing to install** — and doubles as a polished remote for your Mac's playback.
 
-> **Why this exists.** macOS has no built-in way to send arbitrary *system* audio to a phone's browser, in sync — AirPlay only targets Apple speakers and devices, and no open-source project packaged this end to end. The hard part isn't the network; it's **source-timing drift**: a naive capture drops samples and forces the sync engine to re-lock several times a second, so the audio stutters. AirTone fixes it at the root — **gapless `sox` capture with BlackHole pinned as the master clock** — and hides the whole pipeline behind one command. The full diagnostic story is in [docs/troubleshooting.md](docs/troubleshooting.md).
+> **Why this exists.** macOS has no built-in way to send arbitrary *system* audio to a phone's browser, in sync — AirPlay only targets Apple speakers and devices, and no open-source project packaged this end to end. The hard part isn't the network; it's **timing**: a naive capture drops samples and forces the sync engine to re-lock several times a second, so the audio stutters — and when the Mac plays its own audio directly, it runs a full buffer *ahead* of the phone, so the two can never be used together. AirTone fixes both at the root: a **CoreAudio process tap** captures system audio with no virtual driver and without ever switching your output device, and the Mac joins its own stream as a client, so Mac and phone play as one pair. The full diagnostic story is in [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Features
 
@@ -41,13 +41,10 @@ AirTone is a local audio **engine** for macOS. It unifies a virtual sound driver
 ## Quick start
 
 ```bash
-# 1) AirTone (also pulls snapcast, sox, switchaudio-osx)
+# 1) AirTone (also pulls snapcast)
 brew install sait-turanalp/airtone/airtone
 
-# 2) the BlackHole driver — one-time (needs admin + a reboot)
-brew install --cask blackhole-2ch
-
-# 3) set up once, then launch
+# 2) set up once, then launch
 airtone setup
 airtone
 ```
@@ -90,9 +87,9 @@ flowchart LR
   E --> PH["📱 Your phone<br/>browser · no app"]
 ```
 
-**Built on** the best open pieces — [BlackHole](https://github.com/ExistentialAudio/BlackHole), [sox](http://sox.sourceforge.net), [Snapcast](https://github.com/badaix/snapcast), Apple's MediaRemote, and WebRTC — orchestrated into one drift-free pipeline. The part AirTone owns is the **timing**: a gapless capture pinned to a master clock, so nothing stutters.
+**Built on** the best open pieces — Apple's CoreAudio process taps, [Snapcast](https://github.com/badaix/snapcast), Apple's MediaRemote, and WebRTC — orchestrated into one drift-free pipeline. The part AirTone owns is the **timing**: a driver-free capture feeding a stream the Mac itself plays back, so every device stays together.
 
-Full design notes: [docs/architecture.md](docs/architecture.md).
+Full design notes: [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Comparison
 
@@ -109,16 +106,17 @@ Full design notes: [docs/architecture.md](docs/architecture.md).
 
 ## Requirements
 
-- macOS 11+ (Apple Silicon recommended)
-- [BlackHole 2ch](https://github.com/ExistentialAudio/BlackHole) audio driver
-- `snapcast` + `sox` (pulled by Homebrew); `ffmpeg` for `instant`
+- macOS 14.2+ (the system-audio tap API; Apple Silicon recommended)
+- Xcode Command Line Tools (`xcode-select --install`) — the tap is compiled once at setup
+- `snapcast` (pulled by Homebrew); `ffmpeg` for `instant`
 - A phone on the **same Wi-Fi** as the Mac
 
 ## Honest limitations
 
 - **The phone can't be a native AirPlay receiver** — an Apple restriction; AirTone uses a local web stream instead.
-- **BlackHole needs admin + a reboot** to install (the setup wizard guides you).
+- **Party mode mutes the Mac's direct output** — on purpose: the Mac plays the synced stream instead, which is the only way it can stay in step with your phone. Quitting restores it.
 - **Sync means latency** — everyone plays a little behind "live," together. Tunable: lower is snappier, higher is smoother.
+- **A phone browser is the loosest client** — tens of milliseconds, not the sub-millisecond a native client reaches. Fine for listening; not for lip-sync.
 - **The stream is unencrypted on your LAN** — fine for home; don't expose it to untrusted networks.
 
 ## Roadmap

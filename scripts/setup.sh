@@ -1,8 +1,10 @@
 #!/bin/bash
 # AirTone engine — SETUP (one-time)
-# 1) Creates the "AirTone Sync" Multi-Output device (needs BlackHole installed).
+# 1) Compiles the CoreAudio system tap used to capture system audio.
 # 2) Downloads the Snapweb browser player into the data dir.
-set -uo pipefail
+# No virtual audio driver, no admin password, no reboot: the tap is a public
+# CoreAudio API (macOS 14.2+) and never touches the user's output device.
+set -euo pipefail
 # shellcheck source=scripts/common.sh disable=SC1091
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/common.sh"
 
@@ -11,13 +13,9 @@ SNAPWEB_URL="https://github.com/snapcast/snapweb/releases/download/${SNAPWEB_VER
 
 mkdir -p "$AIRTONE_HOME"
 
-echo "==> Creating '$DEVICE_NAME' Multi-Output device..."
-if ! device_exists "$CAPTURE_DEVICE"; then
-  echo "error: '$CAPTURE_DEVICE' not found. Install it first:" >&2
-  echo "       brew install --cask blackhole-2ch   (needs admin + reboot)" >&2
-  exit 1
-fi
-swift "$ASSETS_DIR/multioutput.swift"
+echo "==> Building the system tap..."
+build_tap
+echo "    Ready at $TAP_BIN"
 
 echo "==> Fetching Snapweb ($SNAPWEB_VERSION)..."
 if [ -f "$SNAPWEB_DIR/index.html" ]; then

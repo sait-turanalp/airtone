@@ -1,6 +1,6 @@
 // Package airtone embeds the proven audio engine (shell scripts, the Swift
-// Multi-Output helper, and the snapserver config template) so the compiled
-// binary is fully self-contained and needs no repo checkout at runtime.
+// system-tap capture helper, and the snapserver config template) so the
+// compiled binary is fully self-contained and needs no repo checkout at runtime.
 package airtone
 
 import "embed"

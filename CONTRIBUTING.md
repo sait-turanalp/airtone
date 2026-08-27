@@ -8,8 +8,8 @@ Requirements: Go 1.22+, and the runtime dependencies for actually running the br
 
 ```bash
 # runtime deps (macOS)
-brew install snapcast sox
-brew install --cask blackhole-2ch   # needs admin + reboot
+brew install snapcast
+xcode-select --install   # the system tap is compiled at setup
 
 # build
 git clone https://github.com/sait-turanalp/airtone.git
@@ -22,23 +22,26 @@ go build ./cmd/airtone
 
 ```
 cmd/airtone/      CLI/TUI entrypoint
+embedfs.go        //go:embed of scripts/ + assets/ — the self-contained engine
 internal/
-  tui/            Bubble Tea screens (wizard, dashboard, settings, doctor)
-  pipeline/       starts/stops snapserver + sox, manages processes
-  rpc/            Snapcast JSON-RPC client (live status & control)
-  installer/      BlackHole / Snapweb / Multi-Output setup
-  config/         config + profiles
-assets/           snapserver.conf template, Multi-Output helper
+  engine/         extracts the embedded engine and shells out to it
+  tui/            Bubble Tea screens (dashboard, settings, doctor)
+  rpc/            Snapcast JSON-RPC client (live status)
+  doctor/         readiness checks
+  instant/        Instant-mode WebRTC server (pion)
+  remote/         phone control layer: now-playing, artwork, volume, transport
+scripts/          the engine: common.sh · setup.sh · start.sh · stop.sh
+assets/           snapserver.conf template, systemtap.swift (the capture path)
 docs/             architecture & troubleshooting
 ```
 
 ## Architecture rule
 
-The shell/Swift/sox/snapserver pipeline is the **proven engine**. Go code orchestrates it and reads status over Snapcast's JSON-RPC — it does not reimplement the audio path. Keep that boundary.
+The shell/Swift/snapserver pipeline is the **proven engine**. Go code orchestrates it and reads status over Snapcast's JSON-RPC — it does not reimplement the audio path. Keep that boundary.
 
 ## Testing
 
-- **Audio path:** can only be verified on a real Mac (CoreAudio/BlackHole/sox are host-only — containers can't test them). Run the bridge and confirm a phone gets gapless, synced audio.
+- **Audio path:** can only be verified on a real Mac (CoreAudio process taps are host-only — containers can't test them). Run the bridge and confirm the Mac and a phone get gapless audio, together.
 - **Everything else:** `go vet ./...`, `go test ./...`, and `shellcheck` on shell scripts must pass. Pure plumbing can be smoke-tested with a synthetic PCM source feeding snapserver.
 
 ## Commit messages

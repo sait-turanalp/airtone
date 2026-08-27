@@ -3,6 +3,22 @@
 All notable changes to this project are documented here.
 Format loosely follows [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased]
+
+### Changed
+- **System audio is now captured with a CoreAudio process tap** instead of the BlackHole driver
+  and an "AirTone Sync" Multi-Output device. No driver install, no admin password, no reboot —
+  and AirTone never switches your output device, so AirPods and external DACs just keep working.
+  Requires macOS 14.2+ and the Xcode command line tools.
+- **Party mode now plays on the Mac through a local snapclient.** The tap mutes the Mac's own
+  output and the Mac joins its own stream as a client, so the Mac and every phone share one
+  clock instead of the Mac running a full buffer ahead. A phone next to the Mac no longer echoes.
+- Default buffer lowered from 1000 ms to 500 ms (`AIRTONE_BUFFER`).
+
+### Removed
+- Dependencies on `sox`, `switchaudio-osx` and the BlackHole 2ch cask.
+- The output-device save/restore machinery — there is no longer a device to restore.
+
 ## [0.3.0]
 
 ### Added
