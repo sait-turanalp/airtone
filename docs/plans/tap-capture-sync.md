@@ -22,6 +22,8 @@ Boru hattı şu an CANLI (`airtone party`) — kullanıcı telefonla test edebil
 - [x] 4 · Instant modu + dokümanlar    gate: ✅ repo'da BlackHole yalnız tarihçe olarak geçiyor
 
 ## done
+- 08-27: **Kararlılık ölçüldü — akış temiz.** Temiz taban 3 dk boşta: 2 resync (ikisi de açılışın ilk 300 ms'i, sessizlik-pompası→gerçek-tap devri), sonrası SIFIR. Parça değişimi (dur/boşluk/başka ses): 0 resync. Örnekleme hızı geçişleri 44.1k→48k→96k→44.1k: 0 resync (macOS cihaz hızına yeniden örnekliyor, tap 48000'de sabit). Saat sapması: 192000 bayt/sn = 48000.0 Hz, **+0.000%**.
+- 08-27: Yanlış alarm dersi — ilk bakılan logda 25 resync vardı, sebebi kendi test taplarımdı (art arda aggregate cihaz yaratıp yok etmek çalışan tap'i rahatsız ediyor). Ölçüm sırasında paralel tap açma; taban her zaman dokunulmamış boru hattında alınır.
 - 08-27: Faz 2-4 kapandı (kulak testi hariç). Motor tap'e geçti, Mac snapclient oldu, `sox`+`switchaudio-osx`+BlackHole bağımlılıkları ve cihaz geri-yükleme makinesi silindi. Kapılar: go vet/build/test + shellcheck yeşil; `airtone doctor` 6/6.
 - 08-27: Uçtan uca kanıt — ton kaynağı DIŞLANMIŞken tap hâlâ RMS 0.2477 kaydetti ve FFT 440.0 Hz verdi; bu ses yalnız snapclient'in geri çalmasından gelebilir → zincir kapalı.
 - 08-27: Başlangıç kilidi bulundu ve çözüldü — snapclient CoreAudio'ya ancak *çalarken* kaydoluyor, akış ise tap olmadan başlamıyor. Tap artık dışlanacak süreç belirene kadar gerçek-zamanlı sessizlik yayınlıyor.
@@ -42,6 +44,9 @@ Boru hattı şu an CANLI (`airtone party`) — kullanıcı telefonla test edebil
 - open: `CATapMutedWhenTapped` seçildi (çökmede ses kendiliğinden geri gelsin diye); `CATapMuted` ile farkı kulakla ayırt edilmedi — pratikte fark görülmedi.
 - open: snapclient çökerse audio object ID değişir, dışlama kopar → geri-besleme. Şimdilik `ponytail:` şerhiyle bırakılıyor (gözlenmeden çözülmeyecek); gözlenirse tap'i yeniden yaratan bir watcher gerekir.
 - open: iPhone Safari'de gerçek sapma bandı ölçülmedi — hedef ~50 ms, kulak testi faz 2 kapısı.
+- open: **ölçümlerin tamamı Mac tarafında.** Telefon bacağı (Wi-Fi + Safari WebAudio) buradan ölçülemiyor ve kesilmeye en açık halka orası; kulak testi bunu da kapsamalı.
+- open: yayın açıkken çıkış cihazı değiştirme (AirPods/HDMI) test EDİLMEDİ — bu makinede ikinci bir çıkış cihazı yok. Tap, açılışta bulunan cihaz UID'sine pinli aggregate kullanıyor; cihaz değişince ne olduğu bilinmiyor.
+- open: açılışta 2 resync (66 ms + 152 ms) sessizlik-pompası devrinde. Kimse dinlemiyorken olduğu için bırakıldı; kulakta bir açılış patlaması duyulursa burası bakılacak.
 
 ## non-goals
 - Radyo/jukebox modu (YouTube linki verip çalma) — tap sistem sesini zaten aldığı için gereksizleşti.
